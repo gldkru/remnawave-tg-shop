@@ -87,22 +87,21 @@ class PanelWebhookService:
                     # Update panel expiry to ensure actual service access is extended
                     try:
                         panel_payload = {
-                            "uuid": sub.panel_user_uuid,
                             "expireAt": new_end_date.isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
                             "status": "ACTIVE",
                         }
                         panel_update_resp = await self.panel_service.update_user_details_on_panel(
-                            sub.panel_user_uuid,
+                            sub.panel_user_id,
                             panel_payload,
                             log_response=True,
                         )
                         if panel_update_resp:
                             logging.info(
-                                f"Panel expiry updated for user {user_id} (panel_uuid {sub.panel_user_uuid}) to {new_end_date}"
+                                f"Panel expiry updated for user {user_id} (panel_id {sub.panel_user_id}) to {new_end_date}"
                             )
                     except Exception as e_panel:
                         logging.error(
-                            f"Failed to update panel expiry for user {user_id} (panel_uuid {sub.panel_user_uuid}): {e_panel}")
+                            f"Failed to update panel expiry for user {user_id} (panel_id {sub.panel_user_id}): {e_panel}")
 
                     # Create a succeeded payment record in DB with the same amount/currency as last tribute payment
                     try:

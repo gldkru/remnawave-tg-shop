@@ -270,21 +270,21 @@ class TributeService:
                     },
                 )
 
-                panel_uuid = updated_sub.panel_user_uuid if updated_sub else None
-                if panel_uuid and panel_uuid not in panel_users_updated:
-                    panel_users_updated.add(panel_uuid)
+                panel_id = updated_sub.panel_user_id if updated_sub else None
+                if panel_id and panel_id not in panel_users_updated:
+                    panel_users_updated.add(panel_id)
                     panel_payload = {
                         "expireAt": grace_end.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
                     }
                     try:
                         await self.panel_service.update_user_details_on_panel(
-                            panel_uuid,
+                            panel_id,
                             panel_payload,
                             log_response=False,
                         )
                     except Exception as panel_err:
                         logging.error(
-                            f"Failed to update panel expiry for user {user_id} (panel_uuid {panel_uuid}) during Tribute cancellation: {panel_err}")
+                            f"Failed to update panel expiry for user {user_id} (panel_id {panel_id}) during Tribute cancellation: {panel_err}")
 
             await session.commit()
             

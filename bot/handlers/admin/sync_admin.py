@@ -32,7 +32,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
     users_without_telegram_id = 0
     users_not_found_in_db = 0
     users_created = 0
-    users_uuid_updated = 0
+    users_panel_id_updated = 0
     subscriptions_created = 0
     subscriptions_updated = 0
 
@@ -60,13 +60,13 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
         for panel_user_dict in panel_users_data:
             try:
                 panel_records_checked += 1
-                panel_uuid = panel_user_dict.get("uuid")
+                panel_id = panel_user_dict.get("id")
                 panel_subscription_uuid = panel_user_dict.get("subscriptionUuid") or panel_user_dict.get("shortUuid")
                 telegram_id_from_panel = panel_user_dict.get("telegramId")
 
-                if not panel_uuid:
-                    sync_errors.append(f"Panel user missing UUID: {panel_user_dict}")
-                    logging.warning(f"Skipping panel user without UUID: {panel_user_dict}")
+                if not panel_id:
+                    sync_errors.append(f"Panel user missing id: {panel_user_dict}")
+                    logging.warning(f"Skipping panel user without id: {panel_user_dict}")
                     continue
 
                 # Track users without telegram ID
@@ -82,11 +82,11 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                     if existing_user:
                         logging.debug(f"Found user by telegramId {telegram_id_from_panel}")
                 
-                # If not found by telegram ID, try to find by panel UUID
+                # If not found by telegram ID, try to find by panel id
                 if not existing_user:
-                    existing_user = await user_dal.get_user_by_panel_uuid(session, panel_uuid)
+                    existing_user = await user_dal.get_user_by_panel_id(session, panel_id)
                     if existing_user:
-                        logging.info(f"Found user by panel UUID {panel_uuid}, telegramId: {existing_user.user_id}")
+                        logging.info(f"Found user by panel id {panel_id}, telegramId: {existing_user.user_id}")
                         # Update telegram ID if it was missing in panel data but we have local user
                         if telegram_id_from_panel and existing_user.user_id != telegram_id_from_panel:
                             logging.warning(f"TelegramId mismatch: panel={telegram_id_from_panel}, local={existing_user.user_id}")
@@ -102,7 +102,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                                 "first_name": None,  # Panel doesn't provide this info
                                 "last_name": None,   # Panel doesn't provide this info
                                 "language_code": "ru",  # Default language
-                                "panel_user_uuid": panel_uuid,
+                                "panel_user_id": panel_id,
                                 "is_banned": False,
                                 "referred_by_id": None
                             }
@@ -110,7 +110,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                             new_user, was_created = await user_dal.create_user(session, user_data)
                             if was_created:
                                 users_created += 1
-                                logging.info(f"Created new user {telegram_id_from_panel} from panel sync with UUID {panel_uuid}")
+                                logging.info(f"Created new user {telegram_id_from_panel} from panel sync with panel id {panel_id}")
                             
                             existing_user = new_user
                             
@@ -119,7 +119,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                             logging.error(f"Error creating user {telegram_id_from_panel}: {e_create}")
                             continue
                     else:
-                        logging.debug(f"Panel user with UUID {panel_uuid} (no telegramId) not found in local DB - skipping")
+                        logging.debug(f"Panel user with id {panel_id} (no telegramId) not found in local DB - skipping")
                         continue
 
                 # User found in local DB
@@ -129,16 +129,16 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                 # Get the actual user_id for subscription operations
                 actual_user_id = existing_user.user_id
 
-                # Update panel UUID if different
-                if existing_user.panel_user_uuid != panel_uuid:
-                    existing_user.panel_user_uuid = panel_uuid
+                # Update panel id if different
+                if existing_user.panel_user_id != panel_id:
+                    existing_user.panel_user_id = panel_id
                     user_was_updated = True
-                    users_uuid_updated += 1
-                    logging.info(f"Updated panel UUID for user {actual_user_id}: {panel_uuid}")
+                    users_panel_id_updated += 1
+                    logging.info(f"Updated panel id for user {actual_user_id}: {panel_id}")
 
                 # Ensure panel description contains Telegram fields
                 try:
-                    if panel_uuid and existing_user:
+                    if panel_id and existing_user:
                         description_text = "\n".join([
                             existing_user.username or "",
                             existing_user.first_name or "",
@@ -149,11 +149,11 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                         desired_description = description_text.strip()
                         if desired_description and desired_description != current_panel_description:
                             await panel_service.update_user_details_on_panel(
-                                panel_uuid, {"description": description_text}
+                                panel_id, {"description": description_text}
                             )
                 except Exception as e_desc:
                     logging.warning(
-                        f"Sync: Failed to update description for panel user {panel_uuid} (tg {actual_user_id}): {e_desc}"
+                        f"Sync: Failed to update description for panel user {panel_id} (tg {actual_user_id}): {e_desc}"
                     )
 
                 # Sync subscription data
@@ -187,7 +187,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                                     existing_sub_by_uuid.subscription_id,
                                     {
                                         "user_id": actual_user_id,
-                                        "panel_user_uuid": panel_uuid,
+                                        "panel_user_id": panel_id,
                                         "end_date": panel_expire_at,
                                         "is_active": panel_status == "ACTIVE",
                                         "status_from_panel": panel_status,
@@ -203,7 +203,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                                 # Create a new subscription only when we have a concrete subscription UUID
                                 sub_payload = {
                                     "user_id": actual_user_id,
-                                    "panel_user_uuid": panel_uuid,
+                                    "panel_user_id": panel_id,
                                     "panel_subscription_uuid": subscription_uuid_from_panel,
                                     # Do not guess precise start_date from panel; keep nullable
                                     "start_date": None,
@@ -225,7 +225,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                         else:
                             # No subscription UUID from panel: only update an already active subscription for this user/panel UUID
                             active_sub = await subscription_dal.get_active_subscription_by_user_id(
-                                session, actual_user_id, panel_uuid
+                                session, actual_user_id, panel_id
                             )
                             if active_sub:
                                 await subscription_dal.update_subscription(
@@ -246,7 +246,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                             else:
                                 # Without a concrete subscription UUID we avoid creating new records to keep sync idempotent
                                 logging.debug(
-                                    f"No subscriptionUuid for panel user {panel_uuid}; skipped creation for user {actual_user_id}"
+                                    f"No subscriptionUuid for panel user {panel_id}; skipped creation for user {actual_user_id}"
                                 )
                             
                     except Exception as e:
@@ -257,7 +257,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
                     users_updated += 1
                             
             except Exception as e_user:
-                sync_errors.append(f"Error processing panel user {panel_user_dict.get('uuid', 'unknown')}: {str(e_user)}")
+                sync_errors.append(f"Error processing panel user {panel_user_dict.get('id', 'unknown')}: {str(e_user)}")
                 logging.error(f"Error syncing user: {e_user}")
 
         # Update sync status
@@ -296,7 +296,7 @@ async def perform_sync(panel_service: PanelApiService, session: AsyncSession,
         logging.info(f"  Users not found in local DB: {users_not_found_in_db}")
         logging.info(f"  Users found in local DB: {users_found_in_db}")
         logging.info(f"  Users created: {users_created}")
-        logging.info(f"  Users with UUID updated: {users_uuid_updated}")
+        logging.info(f"  Users with panel id updated: {users_panel_id_updated}")
         logging.info(f"  Users updated overall: {users_updated}")
         logging.info(f"  Subscriptions total synced: {subscriptions_synced_count}")
         logging.info(f"  Subscriptions created: {subscriptions_created}")
