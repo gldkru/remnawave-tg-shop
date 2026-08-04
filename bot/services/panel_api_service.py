@@ -15,6 +15,8 @@ from db.models import PanelSyncStatus
 
 class PanelApiService:
 
+    TELEGRAM_ID_FILTER_PAGE_SIZE = 100
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self.base_url = settings.PANEL_API_URL
@@ -265,21 +267,28 @@ class PanelApiService:
             username: Optional[str] = None,
             log_response: bool = True) -> Optional[List[Dict[str, Any]]]:
         """
-        Remnawave 3.x dropped /users/by-telegram-id and /users/by-email, and the list
-        endpoint ignores a telegramId query parameter. Bot-managed panel accounts are
-        always named tg_<telegram_id>, so by-username covers both lookups.
+        Remnawave 3.x removed /users/by-telegram-id and /users/by-email.
+
+        Username lookups keep their dedicated endpoint. Telegram lookups go through the
+        list endpoint's TanStack-style filter, which matches with LIKE -- a filter on
+        "7796" also returns telegram id 779678662 -- so matches are narrowed to an exact
+        comparison here. Getting that wrong would link a payment to somebody else's
+        panel account.
         """
+        if username is not None:
+            return await self._get_users_by_username(username, log_response)
         if telegram_id is not None:
-            username = f"tg_{telegram_id}"
+            return await self._get_users_by_telegram_id(telegram_id, log_response)
 
-        if username is None:
-            logging.warning(
-                "get_users_by_filter called without any specific filter criteria.")
-            return []
+        logging.warning(
+            "get_users_by_filter called without any specific filter criteria.")
+        return []
 
-        endpoint = f"/users/by-username/{username}"
+    async def _get_users_by_username(
+            self, username: str,
+            log_response: bool) -> Optional[List[Dict[str, Any]]]:
         response_data = await self._request("GET",
-                                            endpoint,
+                                            f"/users/by-username/{username}",
                                             log_full_response=log_response)
 
         if response_data and not response_data.get(
@@ -295,6 +304,46 @@ class PanelApiService:
             f"Failed to fetch panel user by username={username}. Last API response: {response_data if not log_response else '(logged above)'}"
         )
         return None
+
+    async def _get_users_by_telegram_id(
+            self, telegram_id: int,
+            log_response: bool) -> Optional[List[Dict[str, Any]]]:
+        params = {
+            "start": 0,
+            "size": self.TELEGRAM_ID_FILTER_PAGE_SIZE,
+            "filters": json.dumps([{
+                "id": "telegramId",
+                "value": str(telegram_id)
+            }]),
+        }
+        response_data = await self._request("GET",
+                                            "/users",
+                                            params=params,
+                                            log_full_response=log_response)
+
+        if not response_data or response_data.get(
+                "error") or "response" not in response_data:
+            logging.error(
+                f"Failed to fetch panel users by telegramId={telegram_id}. Last API response: {response_data if not log_response else '(logged above)'}"
+            )
+            return None
+
+        payload = response_data.get("response") or {}
+        candidates = payload.get("users") or []
+        total = payload.get("total", len(candidates))
+        if total > self.TELEGRAM_ID_FILTER_PAGE_SIZE:
+            logging.warning(
+                f"telegramId={telegram_id} substring-matched {total} panel users; "
+                f"only the first {self.TELEGRAM_ID_FILTER_PAGE_SIZE} were examined.")
+
+        exact = [
+            user for user in candidates
+            if str(user.get("telegramId")) == str(telegram_id)
+        ]
+        if not exact:
+            logging.info(
+                f"Panel API: user not found for telegramId={telegram_id}")
+        return exact
 
     async def create_panel_user(
             self,
