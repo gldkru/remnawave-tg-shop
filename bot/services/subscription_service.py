@@ -42,10 +42,10 @@ class SubscriptionService:
         """Return True if user currently has an active subscription (end_date in future)."""
         try:
             user_record = await user_dal.get_user_by_id(session, user_id)
-            if not user_record or not user_record.panel_user_uuid:
+            if not user_record or not user_record.panel_user_id:
                 return False
             active_sub = await subscription_dal.get_active_subscription_by_user_id(
-                session, user_id, user_record.panel_user_uuid
+                session, user_id, user_record.panel_user_id
             )
             if not active_sub or not active_sub.end_date:
                 return False
@@ -70,7 +70,7 @@ class SubscriptionService:
 
     async def _get_or_create_panel_user_link_details(
         self, session: AsyncSession, user_id: int, db_user: Optional[User] = None
-    ) -> Tuple[Optional[str], Optional[str], Optional[str], bool]:
+    ) -> Tuple[Optional[int], Optional[str], Optional[str], bool]:
         if not db_user:
             db_user = await user_dal.get_user_by_id(session, user_id)
 
@@ -80,7 +80,7 @@ class SubscriptionService:
             )
             return None, None, None, False
 
-        current_local_panel_uuid = db_user.panel_user_uuid
+        current_local_panel_id = db_user.panel_user_id
         panel_username_on_panel_standard = f"tg_{user_id}"
 
         panel_user_obj_from_api = None
@@ -92,7 +92,7 @@ class SubscriptionService:
         if panel_users_by_tg_id_list and len(panel_users_by_tg_id_list) == 1:
             panel_user_obj_from_api = panel_users_by_tg_id_list[0]
             logging.info(
-                f"Found panel user by telegramId {user_id}: UUID {panel_user_obj_from_api.get('uuid')}, Username: {panel_user_obj_from_api.get('username')}"
+                f"Found panel user by telegramId {user_id}: id {panel_user_obj_from_api.get('id')}, Username: {panel_user_obj_from_api.get('username')}"
             )
         elif panel_users_by_tg_id_list and len(panel_users_by_tg_id_list) > 1:
             logging.error(
@@ -101,17 +101,17 @@ class SubscriptionService:
             return None, None, None, False
 
         if not panel_user_obj_from_api:
-            if current_local_panel_uuid:
+            if current_local_panel_id:
 
                 logging.info(
-                    f"User {user_id} (local panel_uuid: {current_local_panel_uuid}) not found on panel by TG ID. Fetching by panel_uuid."
+                    f"User {user_id} (local panel_id: {current_local_panel_id}) not found on panel by TG ID. Fetching by panel_id."
                 )
-                panel_user_obj_from_api = await self.panel_service.get_user_by_uuid(
-                    current_local_panel_uuid
+                panel_user_obj_from_api = await self.panel_service.get_user_by_panel_id(
+                    current_local_panel_id
                 )
                 if not panel_user_obj_from_api:
                     logging.warning(
-                        f"Local panel_uuid {current_local_panel_uuid} for TG user {user_id} also not found on panel. User might be deleted from panel or UUID desynced."
+                        f"Local panel_id {current_local_panel_id} for TG user {user_id} also not found on panel. User might be deleted from panel or UUID desynced."
                     )
                     logging.info(
                         f"Creating new panel user '{panel_username_on_panel_standard}' for TG user {user_id}."
@@ -142,7 +142,7 @@ class SubscriptionService:
             else:
 
                 logging.info(
-                    f"No panel user by TG ID & no local panel_uuid for TG user {user_id}. Creating new panel user '{panel_username_on_panel_standard}'."
+                    f"No panel user by TG ID & no local panel_id for TG user {user_id}. Creating new panel user '{panel_username_on_panel_standard}'."
                 )
                 creation_response = await self.panel_service.create_panel_user(
                     username_on_panel=panel_username_on_panel_standard,
@@ -189,66 +189,66 @@ class SubscriptionService:
             )
 
             return (
-                current_local_panel_uuid if current_local_panel_uuid else None,
+                current_local_panel_id if current_local_panel_id else None,
                 None,
                 None,
                 panel_user_created_or_linked_now,
             )
 
-        actual_panel_uuid_from_api = panel_user_obj_from_api.get("uuid")
+        actual_panel_id_from_api = panel_user_obj_from_api.get("id")
         actual_panel_username_from_api = panel_user_obj_from_api.get("username")
         panel_telegram_id_from_api = panel_user_obj_from_api.get("telegramId")
 
-        if not actual_panel_uuid_from_api:
+        if not actual_panel_id_from_api:
             logging.error(
-                f"Panel user object for TG user {user_id} does not contain 'uuid'. Data: {panel_user_obj_from_api}"
+                f"Panel user object for TG user {user_id} does not contain 'id'. Data: {panel_user_obj_from_api}"
             )
             return (
-                current_local_panel_uuid,
+                current_local_panel_id,
                 None,
                 None,
                 panel_user_created_or_linked_now,
             )
 
-        needs_local_panel_uuid_update = False
-        if current_local_panel_uuid is None and actual_panel_uuid_from_api:
-            needs_local_panel_uuid_update = True
+        needs_local_panel_id_update = False
+        if current_local_panel_id is None and actual_panel_id_from_api:
+            needs_local_panel_id_update = True
         elif (
-            current_local_panel_uuid is not None
-            and current_local_panel_uuid != actual_panel_uuid_from_api
+            current_local_panel_id is not None
+            and current_local_panel_id != actual_panel_id_from_api
         ):
             logging.warning(
-                f"Local panel_uuid for user {user_id} ('{current_local_panel_uuid}') "
-                f"differs from panel's UUID ('{actual_panel_uuid_from_api}') for their telegramId. "
+                f"Local panel_id for user {user_id} ('{current_local_panel_id}') "
+                f"differs from panel's UUID ('{actual_panel_id_from_api}') for their telegramId. "
                 f"Will attempt to update local to panel's version."
             )
-            needs_local_panel_uuid_update = True
+            needs_local_panel_id_update = True
 
-        if needs_local_panel_uuid_update:
+        if needs_local_panel_id_update:
 
-            conflicting_user_record = await user_dal.get_user_by_panel_uuid(
-                session, actual_panel_uuid_from_api
+            conflicting_user_record = await user_dal.get_user_by_panel_id(
+                session, actual_panel_id_from_api
             )
             if conflicting_user_record and conflicting_user_record.user_id != user_id:
                 logging.error(
-                    f"CRITICAL CONFLICT: Panel UUID {actual_panel_uuid_from_api} (from panel for TG ID {user_id}) "
+                    f"CRITICAL CONFLICT: Panel UUID {actual_panel_id_from_api} (from panel for TG ID {user_id}) "
                     f"is ALREADY LINKED in local DB to a different TG User {conflicting_user_record.user_id}. "
-                    f"Cannot update panel_user_uuid for user {user_id}. Manual data correction needed."
+                    f"Cannot update panel_user_id for user {user_id}. Manual data correction needed."
                 )
 
                 return None, None, None, False
             else:
 
                 update_data_for_local_user = {
-                    "panel_user_uuid": actual_panel_uuid_from_api
+                    "panel_user_id": actual_panel_id_from_api
                 }
 
                 # Do not overwrite Telegram username with panel username.
                 # Only update the local linkage to panel UUID here.
                 await user_dal.update_user(session, user_id, update_data_for_local_user)
-                db_user.panel_user_uuid = actual_panel_uuid_from_api
+                db_user.panel_user_id = actual_panel_id_from_api
                 panel_user_created_or_linked_now = True
-                current_local_panel_uuid = actual_panel_uuid_from_api
+                current_local_panel_id = actual_panel_id_from_api
         else:
 
             pass
@@ -262,15 +262,15 @@ class SubscriptionService:
 
         if (
             panel_user_obj_from_api
-            and current_local_panel_uuid
+            and current_local_panel_id
             and panel_telegram_id_int != user_id
         ):
             logging.info(
-                f"Panel user {current_local_panel_uuid} has telegramId '{panel_telegram_id_from_api}'. Updating on panel to '{user_id}'."
+                f"Panel user {current_local_panel_id} has telegramId '{panel_telegram_id_from_api}'. Updating on panel to '{user_id}'."
             )
             # Also set readable description with Telegram fields
             await self.panel_service.update_user_details_on_panel(
-                current_local_panel_uuid,
+                current_local_panel_id,
                 {
                     "telegramId": user_id,
                     "description": "\n".join(
@@ -288,13 +288,13 @@ class SubscriptionService:
         ) or panel_user_obj_from_api.get("shortUuid")
         panel_short_uuid = panel_user_obj_from_api.get("shortUuid")
 
-        if not panel_sub_link_id and current_local_panel_uuid:
+        if not panel_sub_link_id and current_local_panel_id:
             logging.warning(
-                f"No subscriptionUuid or shortUuid found on panel for panel_user_uuid {current_local_panel_uuid} (TG ID: {user_id})."
+                f"No subscriptionUuid or shortUuid found on panel for panel_user_id {current_local_panel_id} (TG ID: {user_id})."
             )
 
         return (
-            current_local_panel_uuid,
+            current_local_panel_id,
             panel_sub_link_id,
             panel_short_uuid,
             panel_user_created_or_linked_now,
@@ -326,11 +326,11 @@ class SubscriptionService:
                 "message_key": "trial_already_had_subscription_or_trial",
             }
 
-        panel_user_uuid, panel_sub_link_id, panel_short_uuid, panel_user_created_now = (
+        panel_user_id, panel_sub_link_id, panel_short_uuid, panel_user_created_now = (
             await self._get_or_create_panel_user_link_details(session, user_id, db_user)
         )
 
-        if not panel_user_uuid or not panel_sub_link_id:
+        if not panel_user_id or not panel_sub_link_id:
             logging.error(f"Failed to get panel link details for trial user {user_id}.")
             return {
                 "eligible": True,
@@ -342,12 +342,12 @@ class SubscriptionService:
         end_date = start_date + timedelta(days=self.settings.TRIAL_DURATION_DAYS)
 
         await subscription_dal.deactivate_other_active_subscriptions(
-            session, panel_user_uuid, panel_sub_link_id
+            session, panel_user_id, panel_sub_link_id
         )
 
         trial_sub_data = {
             "user_id": user_id,
-            "panel_user_uuid": panel_user_uuid,
+            "panel_user_id": panel_user_id,
             "panel_subscription_uuid": panel_sub_link_id,
             "start_date": start_date,
             "end_date": end_date,
@@ -372,7 +372,6 @@ class SubscriptionService:
             }
 
         panel_update_payload = self._build_panel_update_payload(
-            panel_user_uuid=panel_user_uuid,
             expire_at=end_date,
             status="ACTIVE",
             traffic_limit_bytes=self.settings.trial_traffic_limit_bytes,
@@ -388,11 +387,11 @@ class SubscriptionService:
         )
 
         updated_panel_user = await self.panel_service.update_user_details_on_panel(
-            panel_user_uuid, panel_update_payload
+            panel_user_id, panel_update_payload
         )
         if not updated_panel_user or updated_panel_user.get("error"):
             logging.warning(
-                f"Panel user details update FAILED for trial user {panel_user_uuid}. Response: {updated_panel_user}"
+                f"Panel user details update FAILED for trial user {panel_user_id}. Response: {updated_panel_user}"
             )
             await session.rollback()
             return {
@@ -412,7 +411,7 @@ class SubscriptionService:
             "end_date": end_date,
             "days": self.settings.TRIAL_DURATION_DAYS,
             "traffic_gb": self.settings.TRIAL_TRAFFIC_LIMIT_GB,
-            "panel_user_uuid": panel_user_uuid,
+            "panel_user_id": panel_user_id,
             "panel_short_uuid": final_panel_short_uuid,
             "subscription_url": final_subscription_url,
         }
@@ -435,18 +434,18 @@ class SubscriptionService:
             )
             return None
 
-        panel_user_uuid, panel_sub_link_id, panel_short_uuid, panel_user_created_now = (
+        panel_user_id, panel_sub_link_id, panel_short_uuid, panel_user_created_now = (
             await self._get_or_create_panel_user_link_details(session, user_id, db_user)
         )
 
-        if not panel_user_uuid or not panel_sub_link_id:
+        if not panel_user_id or not panel_sub_link_id:
             logging.error(
                 f"Failed to ensure panel user for TG {user_id} during paid subscription."
             )
             return None
 
         current_active_sub = await subscription_dal.get_active_subscription_by_user_id(
-            session, user_id, panel_user_uuid
+            session, user_id, panel_user_id
         )
         start_date = datetime.now(timezone.utc)
         if (
@@ -495,12 +494,12 @@ class SubscriptionService:
 
         final_end_date = start_date + timedelta(days=duration_days_total)
         await subscription_dal.deactivate_other_active_subscriptions(
-            session, panel_user_uuid, panel_sub_link_id
+            session, panel_user_id, panel_sub_link_id
         )
 
         sub_payload = {
             "user_id": user_id,
-            "panel_user_uuid": panel_user_uuid,
+            "panel_user_id": panel_user_id,
             "panel_subscription_uuid": panel_sub_link_id,
             "start_date": start_date,
             "end_date": final_end_date,
@@ -524,7 +523,6 @@ class SubscriptionService:
             return None
 
         panel_update_payload = self._build_panel_update_payload(
-            panel_user_uuid=panel_user_uuid,
             expire_at=final_end_date,
             status="ACTIVE",
             traffic_limit_bytes=self.settings.user_traffic_limit_bytes,
@@ -540,11 +538,11 @@ class SubscriptionService:
         )
 
         updated_panel_user = await self.panel_service.update_user_details_on_panel(
-            panel_user_uuid, panel_update_payload
+            panel_user_id, panel_update_payload
         )
         if not updated_panel_user or updated_panel_user.get("error"):
             logging.warning(
-                f"Panel user details update FAILED for paid sub user {panel_user_uuid}. Response: {updated_panel_user}"
+                f"Panel user details update FAILED for paid sub user {panel_user_id}. Response: {updated_panel_user}"
             )
             return None
 
@@ -555,7 +553,7 @@ class SubscriptionService:
             "subscription_id": new_or_updated_sub.subscription_id,
             "end_date": final_end_date,
             "is_active": True,
-            "panel_user_uuid": panel_user_uuid,
+            "panel_user_id": panel_user_id,
             "panel_short_uuid": final_panel_short_uuid,
             "subscription_url": final_subscription_url,
             "applied_promo_bonus_days": applied_promo_bonus_days,
@@ -575,17 +573,17 @@ class SubscriptionService:
             )
             return None
 
-        panel_uuid, panel_sub_uuid, _, _ = await self._get_or_create_panel_user_link_details(
+        panel_id, panel_sub_uuid, _, _ = await self._get_or_create_panel_user_link_details(
             session, user_id, user
         )
-        if not panel_uuid or not panel_sub_uuid:
+        if not panel_id or not panel_sub_uuid:
             logging.error(
                 f"Failed to ensure panel user for subscription extension of user {user_id}."
             )
             return None
 
         active_sub = await subscription_dal.get_active_subscription_by_user_id(
-            session, user_id, panel_uuid
+            session, user_id, panel_id
         )
         if not active_sub or not active_sub.end_date:
             logging.info(
@@ -599,7 +597,7 @@ class SubscriptionService:
             
             bonus_sub_payload = {
                 "user_id": user_id,
-                "panel_user_uuid": panel_uuid,
+                "panel_user_id": panel_id,
                 "panel_subscription_uuid": panel_sub_uuid,
                 "start_date": start_date,
                 "end_date": new_end_date_obj,
@@ -609,7 +607,7 @@ class SubscriptionService:
                 "traffic_limit_bytes": traffic_limit,
             }
             await subscription_dal.deactivate_other_active_subscriptions(
-                session, panel_uuid, panel_sub_uuid
+                session, panel_id, panel_sub_uuid
             )
             updated_sub_model = await subscription_dal.upsert_subscription(
                 session, bonus_sub_payload
@@ -633,18 +631,17 @@ class SubscriptionService:
                 traffic_limit_bytes=(
                     self.settings.user_traffic_limit_bytes if "promo code" in reason.lower() else None
                 ),
-                include_uuid=False,
-            )
+                )
             
             panel_update_success = (
                 await self.panel_service.update_user_details_on_panel(
-                    panel_uuid,
+                    panel_id,
                     panel_update_payload,
                 )
             )
             if not panel_update_success:
                 logging.warning(
-                    f"Panel expiry update failed for {panel_uuid} after {reason} bonus. Local DB was updated to {new_end_date_obj}."
+                    f"Panel expiry update failed for {panel_id} after {reason} bonus. Local DB was updated to {new_end_date_obj}."
                 )
 
             logging.info(
@@ -661,24 +658,24 @@ class SubscriptionService:
         self, session: AsyncSession, user_id: int
     ) -> Optional[Dict[str, Any]]:
         db_user = await user_dal.get_user_by_id(session, user_id)
-        if not db_user or not db_user.panel_user_uuid:
+        if not db_user or not db_user.panel_user_id:
             logging.info(
-                f"User {user_id} not found in DB or no panel_user_uuid for 'my_subscription'."
+                f"User {user_id} not found in DB or no panel_user_id for 'my_subscription'."
             )
             return None
 
-        panel_user_uuid = db_user.panel_user_uuid
+        panel_user_id = db_user.panel_user_id
         local_active_sub = await subscription_dal.get_active_subscription_by_user_id(
-            session, user_id, panel_user_uuid
+            session, user_id, panel_user_id
         )
-        panel_user_data = await self.panel_service.get_user_by_uuid(panel_user_uuid)
+        panel_user_data = await self.panel_service.get_user_by_panel_id(panel_user_id)
 
         if not panel_user_data:
             logging.warning(
-                f"Panel user {panel_user_uuid} not found on panel for user {user_id}. Clearing local linkage."
+                f"Panel user {panel_user_id} not found on panel for user {user_id}. Clearing local linkage."
             )
             await subscription_dal.deactivate_all_user_subscriptions(session, user_id)
-            await user_dal.update_user(session, user_id, {"panel_user_uuid": None})
+            await user_dal.update_user(session, user_id, {"panel_user_id": None})
             return None
 
         if local_active_sub:
@@ -862,15 +859,11 @@ class SubscriptionService:
     def _build_panel_update_payload(
         self,
         *,
-        panel_user_uuid: Optional[str] = None,
         expire_at: Optional[datetime] = None,
         status: Optional[str] = None,
         traffic_limit_bytes: Optional[int] = None,
-        include_uuid: bool = True,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {}
-        if include_uuid and panel_user_uuid:
-            payload["uuid"] = panel_user_uuid
         if expire_at is not None:
             payload["expireAt"] = expire_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
         if status is not None:

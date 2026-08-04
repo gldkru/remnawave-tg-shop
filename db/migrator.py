@@ -52,6 +52,54 @@ def _add_missing_columns(connection: Connection) -> None:
             connection.execute(text(ddl))
 
 
+def _relax_legacy_panel_uuid_columns(connection: Connection) -> None:
+    """
+    Remnawave 3.x replaced the user UUID with a numeric id, so panel_user_uuid is no
+    longer written. The column stays in place to preserve the pre-3.x mapping for audits,
+    but its NOT NULL constraint would break every new insert.
+    """
+    inspector = inspect(connection)
+    existing_tables = set(inspector.get_table_names())
+
+    for table_name in ("users", "subscriptions"):
+        if table_name not in existing_tables:
+            continue
+        for column in inspector.get_columns(table_name):
+            if column["name"] == "panel_user_uuid" and not column["nullable"]:
+                logging.info(
+                    f"Migrator: dropping NOT NULL on legacy {table_name}.panel_user_uuid"
+                )
+                connection.execute(
+                    text(f"ALTER TABLE {table_name} ALTER COLUMN panel_user_uuid DROP NOT NULL")
+                )
+
+
+def _backfill_subscription_panel_user_id(connection: Connection) -> None:
+    """
+    subscriptions.panel_user_id is derivable from the owning user once that user has been
+    linked. Users themselves are backfilled through the panel API, keyed on the tg_<id>
+    username, because the pre-3.x UUID no longer exists on the panel side.
+    """
+    inspector = inspect(connection)
+    if "subscriptions" not in set(inspector.get_table_names()):
+        return
+
+    columns = {c["name"] for c in inspector.get_columns("subscriptions")}
+    if "panel_user_id" not in columns:
+        return
+
+    result = connection.execute(
+        text(
+            "UPDATE subscriptions s SET panel_user_id = u.panel_user_id "
+            "FROM users u WHERE u.user_id = s.user_id "
+            "AND s.panel_user_id IS NULL AND u.panel_user_id IS NOT NULL"
+        )
+    )
+    if result.rowcount:
+        logging.info(
+            f"Migrator: backfilled panel_user_id for {result.rowcount} subscriptions"
+        )
+
 def run_simple_migrations(connection: Connection) -> None:
     """
     Run lightweight, idempotent migrations:
@@ -60,6 +108,8 @@ def run_simple_migrations(connection: Connection) -> None:
     """
     try:
         _add_missing_columns(connection)
+        _relax_legacy_panel_uuid_columns(connection)
+        _backfill_subscription_panel_user_id(connection)
         logging.info("Migrator: schema synchronized (columns added as needed).")
     except Exception as e:
         logging.error(f"Migrator: failed to run simple migrations: {e}", exc_info=True)
