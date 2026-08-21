@@ -167,6 +167,43 @@ def get_back_to_main_menu_markup(lang: str,
     return builder.as_markup()
 
 
+def get_devices_keyboard(
+        lang: str,
+        i18n_instance,
+        devices: List[Tuple[int, str]],
+        page: int,
+        total_pages: int) -> InlineKeyboardMarkup:
+    """`devices` holds (human number, hwid) of the devices shown on this page."""
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    builder = InlineKeyboardBuilder()
+
+    for number, hwid in devices:
+        builder.row(
+            InlineKeyboardButton(text=_(key="device_disconnect_button",
+                                        number=number),
+                                 callback_data=f"device_delete:{page}:{hwid}"))
+
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton(text=_(key="device_page_prev_button"),
+                                     callback_data=f"device_page:{page - 1}"))
+        nav.append(
+            InlineKeyboardButton(text=f"{page + 1}/{total_pages}",
+                                 callback_data="device_page:noop"))
+        if page < total_pages - 1:
+            nav.append(
+                InlineKeyboardButton(text=_(key="device_page_next_button"),
+                                     callback_data=f"device_page:{page + 1}"))
+        builder.row(*nav)
+
+    builder.row(
+        InlineKeyboardButton(text=_(key="back_to_main_menu_button"),
+                             callback_data="main_action:my_subscription"))
+    return builder.as_markup()
+
+
 def get_subscribe_only_markup(lang: str, i18n_instance) -> InlineKeyboardMarkup:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()

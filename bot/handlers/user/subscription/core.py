@@ -1,8 +1,10 @@
+import html
 import logging
+import math
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -12,12 +14,15 @@ from bot.keyboards.inline.user_keyboards import (
     get_subscription_options_keyboard,
     get_back_to_main_menu_markup,
     get_autorenew_confirm_keyboard,
+    get_devices_keyboard,
 )
 from bot.services.subscription_service import SubscriptionService
 from bot.services.panel_api_service import PanelApiService
 from bot.middlewares.i18n import JsonI18n
 from db.dal import subscription_dal
 from db.models import Subscription
+
+DEVICES_PAGE_SIZE = 5
 
 router = Router(name="user_subscription_core_router")
 
@@ -173,6 +178,13 @@ async def my_subscription_command_handler(
                     )
                 ])
 
+        prepend_rows.append([
+            InlineKeyboardButton(
+                text=get_text("devices_button"),
+                callback_data="main_action:my_devices",
+            )
+        ])
+
         # 2) Auto-renew toggle (if supported and not tribute)
         if local_sub and local_sub.provider != "tribute" and getattr(settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False):
             toggle_text = (
@@ -214,6 +226,189 @@ async def my_subscription_command_handler(
             )
     else:
         await target.answer(text + tribute_hint, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True)
+
+
+async def _send_view(event: Union[types.Message, types.CallbackQuery], bot: Bot,
+                     text: str, markup: InlineKeyboardMarkup):
+    if not isinstance(event, types.CallbackQuery):
+        await event.answer(text, reply_markup=markup, disable_web_page_preview=True)
+        return
+
+    try:
+        await event.answer()
+    except Exception:
+        pass
+    try:
+        await event.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception:
+        await bot.send_message(
+            chat_id=event.message.chat.id,
+            text=text,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+
+
+def _render_device(number: int, device: Dict[str, Any], get_text) -> str:
+    # Every field below is client-supplied: it reaches the panel as an HTTP header and
+    # goes back out into an HTML message, so it must be escaped, not trusted.
+    quoted = lambda value: html.escape(str(value)) if value else "—"
+    created_at_str = "—"
+    created_at = device.get("createdAt")
+    if created_at:
+        try:
+            created_at_str = datetime.fromisoformat(
+                created_at.replace("Z", "+00:00")).strftime("%d.%m.%Y %H:%M")
+        except ValueError:
+            created_at_str = quoted(created_at)
+
+    return get_text(
+        "device_details",
+        number=number,
+        device_model=quoted(device.get("deviceModel")),
+        platform=quoted(device.get("platform")),
+        os_version=quoted(device.get("osVersion")),
+        created_at=created_at_str,
+        user_agent=quoted(device.get("userAgent")),
+        hwid=quoted(device.get("hwid")),
+    )
+
+
+async def my_devices_command_handler(
+    event: Union[types.Message, types.CallbackQuery],
+    i18n_data: dict,
+    settings: Settings,
+    panel_service: PanelApiService,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+    bot: Bot,
+    page: int = 0,
+):
+    target = event.message if isinstance(event, types.CallbackQuery) else event
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n = i18n_data.get("i18n_instance")
+    get_text = lambda key, **kw: i18n.gettext(current_lang, key, **kw)
+
+    if not i18n or not target:
+        if isinstance(event, types.Message):
+            await event.answer("Language service error.")
+        return
+
+    if not panel_service or not subscription_service:
+        await target.answer(get_text("error_service_unavailable"))
+        return
+
+    active = await subscription_service.get_active_subscription_details(session, event.from_user.id)
+    panel_user_id = (active or {}).get("panel_user_id")
+    if not panel_user_id:
+        await _send_view(event, bot, get_text("subscription_not_active"),
+                         get_back_to_main_menu_markup(current_lang, i18n))
+        return
+
+    devices = await panel_service.get_user_devices(panel_user_id)
+    if devices is None:
+        await _send_view(event, bot, get_text("devices_load_failed"),
+                         get_devices_keyboard(current_lang, i18n, [], 0, 1))
+        return
+
+    # A user without a personal limit is bound by the panel-wide fallback.
+    device_limit = active.get("max_devices") or await panel_service.get_hwid_fallback_device_limit()
+    max_devices = str(device_limit) if device_limit else "∞"
+
+    if not devices:
+        await _send_view(event, bot, get_text("devices_empty", max_devices=max_devices),
+                         get_devices_keyboard(current_lang, i18n, [], 0, 1))
+        return
+
+    # Stable numbering across pages and across re-renders after a deletion.
+    devices.sort(key=lambda device: (device.get("createdAt") or "", device.get("hwid") or ""))
+
+    total_pages = math.ceil(len(devices) / DEVICES_PAGE_SIZE)
+    page = min(max(page, 0), total_pages - 1)
+    first = page * DEVICES_PAGE_SIZE
+    page_devices = devices[first:first + DEVICES_PAGE_SIZE]
+
+    text = get_text(
+        "devices_details",
+        devices="\n\n".join(
+            _render_device(first + offset + 1, device, get_text)
+            for offset, device in enumerate(page_devices)),
+        current_devices=len(devices),
+        max_devices=max_devices,
+    )
+    markup = get_devices_keyboard(
+        current_lang, i18n,
+        [(first + offset + 1, device.get("hwid"))
+         for offset, device in enumerate(page_devices)], page, total_pages)
+
+    await _send_view(event, bot, text, markup)
+
+
+@router.callback_query(F.data.startswith("device_page:"))
+async def devices_page_handler(
+    callback: types.CallbackQuery,
+    i18n_data: dict,
+    settings: Settings,
+    panel_service: PanelApiService,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+    bot: Bot,
+):
+    page = callback.data.split(":", 1)[1]
+    if not page.isdigit():
+        # The page counter itself is a button; tapping it must not redraw anything.
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+        return
+
+    await my_devices_command_handler(callback, i18n_data, settings, panel_service,
+                                     subscription_service, session, bot, page=int(page))
+
+
+@router.callback_query(F.data.startswith("device_delete:"))
+async def device_delete_handler(
+    callback: types.CallbackQuery,
+    i18n_data: dict,
+    settings: Settings,
+    panel_service: PanelApiService,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+    bot: Bot,
+):
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
+    get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
+
+    try:
+        _, page, hwid = callback.data.split(":", 2)
+        page = int(page)
+    except ValueError:
+        try:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        except Exception:
+            pass
+        return
+
+    active = await subscription_service.get_active_subscription_details(session, callback.from_user.id)
+    panel_user_id = (active or {}).get("panel_user_id")
+    if not panel_user_id:
+        await callback.answer(get_text("subscription_not_active"), show_alert=True)
+        return
+
+    # Deletion is keyed on (userId, hwid), so a replayed callback can only ever hit a
+    # device of the caller.
+    if not await panel_service.delete_user_device(panel_user_id, hwid):
+        await callback.answer(get_text("device_disconnect_failed"), show_alert=True)
+        return
+
+    try:
+        await callback.answer(get_text("device_disconnected"))
+    except Exception:
+        pass
+    await my_devices_command_handler(callback, i18n_data, settings, panel_service,
+                                     subscription_service, session, bot, page=page)
 
 
 @router.callback_query(F.data.startswith("toggle_autorenew:"))

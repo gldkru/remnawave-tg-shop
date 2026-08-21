@@ -408,6 +408,10 @@ async def main_action_callback_handler(
         await user_subscription_handlers.my_subscription_command_handler(
             callback, i18n_data, settings, panel_service, subscription_service,
             session, bot)
+    elif action == "my_devices":
+        await user_subscription_handlers.my_devices_command_handler(
+            callback, i18n_data, settings, panel_service, subscription_service,
+            session, bot)
     elif action == "referral":
         await user_referral_handlers.referral_command_handler(
             callback, settings, i18n_data, referral_service, bot, session)

@@ -738,6 +738,8 @@ class SubscriptionService:
         )
 
         return {
+            "panel_user_id": panel_user_id,
+            "max_devices": panel_user_data.get("hwidDeviceLimit"),
             "end_date": panel_end_date,
             "status_from_panel": panel_user_data.get("status", "UNKNOWN").upper(),
             "config_link": panel_user_data.get("subscriptionUrl"),
