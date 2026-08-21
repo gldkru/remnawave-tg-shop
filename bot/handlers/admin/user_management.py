@@ -6,7 +6,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.markdown import hcode, hbold
 from aiogram.utils.text_decorations import html_decoration as hd
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
 
@@ -18,6 +18,8 @@ from bot.keyboards.inline.admin_keyboards import get_back_to_admin_panel_keyboar
 from bot.services.notification_service import NotificationService
 from bot.services.subscription_service import SubscriptionService
 from bot.services.panel_api_service import PanelApiService
+from bot.services.yookassa_service import YooKassaService
+from bot.services.crypto_pay_service import CryptoPayService
 from bot.services.referral_service import ReferralService
 from bot.middlewares.i18n import JsonI18n
 from bot.utils import get_message_content, send_direct_message
@@ -77,6 +79,9 @@ MODERATOR_ACTIONS = frozenset({
     "toggle_ban",
     "clear_devices",
     "clear_devices_confirm",
+    "pay_link",
+    "pay_link_yk",
+    "pay_link_cp",
     "noop",
 })
 
@@ -116,6 +121,10 @@ def get_user_card_keyboard(user_id: int, i18n_instance, lang: str,
     builder.button(
         text=_(key="admin_user_transactions_button", default="💳 Транзакции"),
         callback_data=f"user_action:transactions:{user_id}"
+    )
+    builder.button(
+        text=_(key="admin_user_pay_link_button", default="🧾 Ссылка на оплату"),
+        callback_data=f"user_action:pay_link:{user_id}"
     )
     builder.button(
         text=_(key="admin_user_view_logs_button", default="📜 Действия пользователя"),
@@ -318,18 +327,221 @@ async def audit_staff_action(settings: Settings, bot: Bot, i18n_instance,
         )
 
 
+def get_payment_link_periods_keyboard(user_id: int, settings: Settings,
+                                      i18n_instance, lang: str) -> InlineKeyboardBuilder:
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    builder = InlineKeyboardBuilder()
+    for months, price in sorted(settings.subscription_options.items()):
+        if price is None:
+            continue
+        builder.button(
+            text=_("admin_user_pay_link_period_button",
+                   months=months,
+                   price=f"{float(price):.0f}",
+                   currency=settings.DEFAULT_CURRENCY_SYMBOL),
+            callback_data=f"user_action:pay_link:{user_id}:{months}")
+    builder.button(text=_(key="admin_user_back_to_card_button", default="🔙 К карточке"),
+                   callback_data=f"user_action:refresh:{user_id}")
+    builder.adjust(1)
+    return builder
+
+
+def payment_link_providers(settings: Settings) -> List[Tuple[str, str]]:
+    """Providers that can hand back a payable URL. Stars is an invoice message and
+    Tribute is a static per-period link, so neither belongs here."""
+    providers = []
+    if settings.YOOKASSA_ENABLED:
+        providers.append(("pay_link_yk", "pay_with_yookassa_button"))
+    if settings.CRYPTOPAY_ENABLED:
+        providers.append(("pay_link_cp", "pay_with_cryptopay_button"))
+    return providers
+
+
+async def handle_payment_link(callback: types.CallbackQuery, user: User,
+                              settings: Settings, i18n_instance, lang: str,
+                              months: int):
+    """Pick a period, then a provider. `months` is 0 on the first tap."""
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+
+    providers = payment_link_providers(settings)
+    if not providers:
+        await callback.answer(_("admin_user_pay_link_no_provider"), show_alert=True)
+        return
+    if not settings.subscription_options:
+        await callback.answer(_("admin_user_pay_link_no_options"), show_alert=True)
+        return
+
+    if not months:
+        markup = get_payment_link_periods_keyboard(user.user_id, settings,
+                                                   i18n_instance, lang).as_markup()
+        text = _("admin_user_pay_link_prompt", user_id=user.user_id)
+    else:
+        price = settings.subscription_options.get(months)
+        if price is None:
+            await callback.answer(_("admin_user_pay_link_no_options"), show_alert=True)
+            return
+
+        builder = InlineKeyboardBuilder()
+        for action, text_key in providers:
+            builder.button(text=_(key=text_key),
+                           callback_data=f"user_action:{action}:{user.user_id}:{months}")
+        builder.button(text=_(key="admin_user_back_to_card_button", default="🔙 К карточке"),
+                       callback_data=f"user_action:refresh:{user.user_id}")
+        builder.adjust(1)
+        markup = builder.as_markup()
+        text = _("admin_user_pay_link_provider_prompt",
+                 user_id=user.user_id,
+                 months=months,
+                 price=f"{float(price):.0f}",
+                 currency=settings.DEFAULT_CURRENCY_SYMBOL)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=markup, parse_mode="HTML")
+    await callback.answer()
+
+
+async def create_payment_link(callback: types.CallbackQuery, user: User,
+                              session: AsyncSession, settings: Settings, bot: Bot,
+                              i18n_instance, lang: str, provider: str, months: int,
+                              yookassa_service, cryptopay_service):
+    """Create a payment for the target user and show the staff member its URL.
+
+    The payment record and the provider metadata both carry the *target* user id, so the
+    provider webhook credits the subscription to them and not to whoever generated it.
+    """
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+
+    price = settings.subscription_options.get(months)
+    if price is None:
+        await callback.answer(_("admin_user_pay_link_no_options"), show_alert=True)
+        return
+
+    description = _("payment_description_subscription", months=months)
+    await callback.answer()
+
+    if provider == "yookassa":
+        url, currency = await _create_yookassa_link(session, user, float(price), months,
+                                                    description, settings, yookassa_service)
+    else:
+        currency = settings.CRYPTOPAY_ASSET
+        url = await cryptopay_service.create_invoice(session=session,
+                                                     user_id=user.user_id,
+                                                     months=months,
+                                                     amount=float(price),
+                                                     description=description)
+
+    if not url:
+        text = _("admin_user_pay_link_error")
+        builder = InlineKeyboardBuilder()
+        builder.button(text=_(key="admin_user_back_to_card_button", default="🔙 К карточке"),
+                       callback_data=f"user_action:refresh:{user.user_id}")
+        try:
+            await callback.message.edit_text(text, reply_markup=builder.as_markup())
+        except Exception:
+            await callback.message.answer(text, reply_markup=builder.as_markup())
+        return
+
+    text = _("admin_user_pay_link_ready",
+             user_id=user.user_id,
+             months=months,
+             amount=f"{float(price):.0f}",
+             currency=hd.quote(currency),
+             provider=provider,
+             url=hd.quote(url))
+    builder = InlineKeyboardBuilder()
+    builder.button(text=_(key="admin_user_pay_link_open_button"), url=url)
+    builder.button(text=_(key="admin_user_back_to_card_button", default="🔙 К карточке"),
+                   callback_data=f"user_action:refresh:{user.user_id}")
+    builder.adjust(1)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(),
+                                         parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        await callback.message.answer(text, reply_markup=builder.as_markup(),
+                                       parse_mode="HTML", disable_web_page_preview=True)
+
+    await audit_staff_action(settings, bot, i18n_instance, callback.from_user, user,
+                             "payment_link",
+                             f"{provider}, {months} months, {float(price):.0f} {currency}")
+
+
+async def _create_yookassa_link(session: AsyncSession, user: User, price: float,
+                                months: int, description: str, settings: Settings,
+                                yookassa_service) -> Tuple[Optional[str], str]:
+    currency = "RUB"
+    if not yookassa_service or not yookassa_service.configured:
+        logging.error("YooKassa is not configured; cannot build a staff payment link.")
+        return None, currency
+
+    try:
+        record = await payment_dal.create_payment_record(
+            session, {
+                "user_id": user.user_id,
+                "amount": price,
+                "currency": currency,
+                "status": "pending_yookassa",
+                "description": description,
+                "subscription_duration_months": months,
+                "provider": "yookassa",
+            })
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        logging.error(
+            f"Failed to create a payment record for user {user.user_id}: {e}", exc_info=True)
+        return None, currency
+
+    response = await yookassa_service.create_payment(
+        amount=price,
+        currency=currency,
+        description=description,
+        metadata={
+            "user_id": str(user.user_id),
+            "subscription_months": str(months),
+            "payment_db_id": str(record.payment_id),
+        },
+        receipt_email=settings.YOOKASSA_DEFAULT_RECEIPT_EMAIL,
+        # A staff-generated link is paid by the subscriber, so never bind the card that
+        # pays it to their auto-renew.
+        save_payment_method=False,
+    )
+    url = response.get("confirmation_url") if response else None
+
+    try:
+        await payment_dal.update_payment_status_by_db_id(
+            session,
+            payment_db_id=record.payment_id,
+            new_status=response.get("status", "pending") if url else "failed_creation",
+            yk_payment_id=response.get("id") if response else None)
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        logging.error(
+            f"Failed to update payment record {record.payment_id} after creation: {e}",
+            exc_info=True)
+        return None, currency
+
+    return url, currency
+
+
 @router.callback_query(F.data.startswith("user_action:"))
 async def user_action_handler(callback: types.CallbackQuery, state: FSMContext,
                              settings: Settings, i18n_data: dict, bot: Bot,
                              subscription_service: SubscriptionService,
                              panel_service: PanelApiService,
+                             yookassa_service: YooKassaService,
+                             cryptopay_service: CryptoPayService,
                              session: AsyncSession):
     """Handle user management actions"""
     try:
         parts = callback.data.split(":")
         action = parts[1]
         user_id = int(parts[2])
-        page = int(parts[3]) if len(parts) > 3 else 0
+        # Fourth part is action-specific: a list page, or a subscription period in months.
+        arg = int(parts[3]) if len(parts) > 3 else 0
     except (IndexError, ValueError):
         await callback.answer("Invalid action format.", show_alert=True)
         return
@@ -376,7 +588,13 @@ async def user_action_handler(callback: types.CallbackQuery, state: FSMContext,
                                   session, settings, bot, i18n, current_lang, is_admin)
     elif action == "transactions":
         await handle_user_transactions(callback, user, session, settings, i18n, current_lang,
-                                      is_admin, page)
+                                      is_admin, arg)
+    elif action == "pay_link":
+        await handle_payment_link(callback, user, settings, i18n, current_lang, arg)
+    elif action in ("pay_link_yk", "pay_link_cp"):
+        await create_payment_link(callback, user, session, settings, bot, i18n, current_lang,
+                                  "yookassa" if action == "pay_link_yk" else "cryptopay", arg,
+                                  yookassa_service, cryptopay_service)
     elif action == "send_message":
         await handle_send_message_prompt(callback, state, user, i18n, current_lang)
     elif action == "view_logs":
