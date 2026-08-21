@@ -1,18 +1,21 @@
 import logging
+import math
 import re
 from aiogram import Router, F, types, Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.markdown import hcode, hbold
+from aiogram.utils.text_decorations import html_decoration as hd
 from typing import Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
 
 from config.settings import Settings
-from db.dal import user_dal, subscription_dal, message_log_dal
+from db.dal import user_dal, subscription_dal, message_log_dal, payment_dal
 from db.models import User
 from bot.states.admin_states import AdminStates
 from bot.keyboards.inline.admin_keyboards import get_back_to_admin_panel_keyboard
+from bot.services.notification_service import NotificationService
 from bot.services.subscription_service import SubscriptionService
 from bot.services.panel_api_service import PanelApiService
 from bot.services.referral_service import ReferralService
@@ -27,6 +30,8 @@ from bot.utils.text_sanitizer import (
 
 router = Router(name="admin_user_management_router")
 USERNAME_REGEX = re.compile(r"^[a-zA-Z0-9_]{5,32}$")
+TRANSACTIONS_PAGE_SIZE = 5
+MAX_SUBSCRIPTION_DAYS = 3650
 
 
 async def user_management_menu_handler(callback: types.CallbackQuery,
@@ -61,32 +66,57 @@ async def user_management_menu_handler(callback: types.CallbackQuery,
     await state.set_state(AdminStates.waiting_for_user_search)
 
 
-def get_user_card_keyboard(user_id: int, i18n_instance, lang: str) -> InlineKeyboardBuilder:
+# Everything a moderator may run against the user in front of them. The keyboard only
+# reflects this set; user_action_handler is what enforces it.
+MODERATOR_ACTIONS = frozenset({
+    "refresh",
+    "view_logs",
+    "transactions",
+    "add_subscription",
+    "remove_subscription",
+    "toggle_ban",
+    "clear_devices",
+    "clear_devices_confirm",
+    "noop",
+})
+
+
+def get_user_card_keyboard(user_id: int, i18n_instance, lang: str,
+                           is_admin: bool = True) -> InlineKeyboardBuilder:
     """Generate keyboard for user management actions"""
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()
-    
-    # Row 1: Trial and Subscription actions
-    builder.button(
-        text=_(key="admin_user_reset_trial_button", default="🔄 Сбросить триал"),
-        callback_data=f"user_action:reset_trial:{user_id}"
-    )
+
+    if is_admin:
+        builder.button(
+            text=_(key="admin_user_reset_trial_button", default="🔄 Сбросить триал"),
+            callback_data=f"user_action:reset_trial:{user_id}"
+        )
+        builder.button(
+            text=_(key="admin_user_send_message_button", default="✉️ Отправить сообщение"),
+            callback_data=f"user_action:send_message:{user_id}"
+        )
+
     builder.button(
         text=_(key="admin_user_add_subscription_button", default="➕ Добавить дни"),
         callback_data=f"user_action:add_subscription:{user_id}"
     )
-    
-    # Row 2: Block/Unblock and Message
+    builder.button(
+        text=_(key="admin_user_remove_subscription_button", default="➖ Убрать дни"),
+        callback_data=f"user_action:remove_subscription:{user_id}"
+    )
     builder.button(
         text=_(key="admin_user_toggle_ban_button", default="🚫 Заблокировать/Разблокировать"),
         callback_data=f"user_action:toggle_ban:{user_id}"
     )
     builder.button(
-        text=_(key="admin_user_send_message_button", default="✉️ Отправить сообщение"),
-        callback_data=f"user_action:send_message:{user_id}"
+        text=_(key="admin_user_clear_devices_button", default="📱 Очистить устройства"),
+        callback_data=f"user_action:clear_devices:{user_id}"
     )
-    
-    # Row 3: View actions
+    builder.button(
+        text=_(key="admin_user_transactions_button", default="💳 Транзакции"),
+        callback_data=f"user_action:transactions:{user_id}"
+    )
     builder.button(
         text=_(key="admin_user_view_logs_button", default="📜 Действия пользователя"),
         callback_data=f"user_action:view_logs:{user_id}"
@@ -95,18 +125,16 @@ def get_user_card_keyboard(user_id: int, i18n_instance, lang: str) -> InlineKeyb
         text=_(key="admin_user_refresh_button", default="🔄 Обновить"),
         callback_data=f"user_action:refresh:{user_id}"
     )
-    
-    # Row 4: Back button
     builder.button(
         text=_(key="admin_user_search_new_button", default="🔍 Найти другого"),
-        callback_data="admin_action:users_management"
+        callback_data="admin_action:users_management" if is_admin else "moderator_action:find_user"
     )
     builder.button(
         text=_(key="back_to_admin_panel_button"),
-        callback_data="admin_action:main"
+        callback_data="admin_action:main" if is_admin else "moderator_action:main"
     )
-    
-    builder.adjust(2, 2, 2, 2)
+
+    builder.adjust(2)
     return builder
 
 
@@ -149,9 +177,10 @@ async def format_user_card(user: User, session: AsyncSession,
     if user.referred_by_id:
         card_parts.append(f"{_('admin_user_referral_label', default='🎁 <b>Привлечен по реферальной программе от:</b>')} {hcode(str(user.referred_by_id))}")
     
-    # Panel info
+    # Panel info. 3.x replaced the user UUID with a numeric id: slicing it like a string
+    # raised TypeError and took the whole card down with it.
     if user.panel_user_id:
-        card_parts.append(f"{_('admin_user_panel_id_label', default='🔗 <b>Panel UUID:</b>')} {hcode(user.panel_user_id[:8] + '...' if len(user.panel_user_id) > 8 else user.panel_user_id)}")
+        card_parts.append(f"{_('admin_user_panel_id_label', default='🔗 <b>Panel ID:</b>')} {hcode(str(user.panel_user_id))}")
     
     card_parts.append("")  # Empty line
     
@@ -250,10 +279,11 @@ async def process_user_search_handler(message: types.Message, state: FSMContext,
 
     # Format and send user card
     try:
+        is_admin = settings.is_admin(message.from_user.id)
         referral_service = ReferralService(settings, subscription_service, message.bot, i18n)
         user_card_text = await format_user_card(user_model, session, subscription_service, i18n, current_lang, referral_service)
-        keyboard = get_user_card_keyboard(user_model.user_id, i18n, current_lang)
-        
+        keyboard = get_user_card_keyboard(user_model.user_id, i18n, current_lang, is_admin)
+
         await message.answer(
             user_card_text,
             reply_markup=keyboard.as_markup(),
@@ -267,6 +297,27 @@ async def process_user_search_handler(message: types.Message, state: FSMContext,
         ))
 
 
+async def audit_staff_action(settings: Settings, bot: Bot, i18n_instance,
+                             actor: types.User, target_user: User, action: str,
+                             details: Optional[str] = None):
+    """Record a staff write in the audit chat. Never fails the action it describes."""
+    try:
+        notification_service = NotificationService(bot, settings, i18n_instance)
+        await notification_service.notify_staff_action(
+            actor_id=actor.id,
+            actor_role="admin" if settings.is_admin(actor.id) else "moderator",
+            action=action,
+            target_user_id=target_user.user_id,
+            details=details,
+            actor_username=actor.username,
+            target_username=target_user.username,
+        )
+    except Exception as e:
+        logging.error(
+            f"Failed to write audit record for '{action}' by {actor.id} on {target_user.user_id}: {e}"
+        )
+
+
 @router.callback_query(F.data.startswith("user_action:"))
 async def user_action_handler(callback: types.CallbackQuery, state: FSMContext,
                              settings: Settings, i18n_data: dict, bot: Bot,
@@ -278,6 +329,7 @@ async def user_action_handler(callback: types.CallbackQuery, state: FSMContext,
         parts = callback.data.split(":")
         action = parts[1]
         user_id = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
     except (IndexError, ValueError):
         await callback.answer("Invalid action format.", show_alert=True)
         return
@@ -288,6 +340,16 @@ async def user_action_handler(callback: types.CallbackQuery, state: FSMContext,
         await callback.answer("Language service error.", show_alert=True)
         return
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
+
+    # The keyboard a moderator sees omits admin-only buttons, but a callback can be
+    # replayed by hand, so the allowed set is checked here as well.
+    is_admin = settings.is_admin(callback.from_user.id)
+    if not is_admin and action not in MODERATOR_ACTIONS:
+        logging.warning(
+            f"Moderator {callback.from_user.id} attempted admin-only action '{action}' on user {user_id}."
+        )
+        await callback.answer(_("staff_action_forbidden"), show_alert=True)
+        return
 
     # Get user from database
     user = await user_dal.get_user_by_id(session, user_id)
@@ -301,15 +363,30 @@ async def user_action_handler(callback: types.CallbackQuery, state: FSMContext,
     if action == "reset_trial":
         await handle_reset_trial(callback, user, subscription_service, session, i18n, current_lang)
     elif action == "add_subscription":
-        await handle_add_subscription_prompt(callback, state, user, i18n, current_lang)
+        await handle_subscription_days_prompt(callback, state, user, i18n, current_lang, removing=False)
+    elif action == "remove_subscription":
+        await handle_subscription_days_prompt(callback, state, user, i18n, current_lang, removing=True)
     elif action == "toggle_ban":
-        await handle_toggle_ban(callback, user, panel_service, session, i18n, current_lang)
+        await handle_toggle_ban(callback, user, panel_service, subscription_service,
+                                session, settings, bot, i18n, current_lang, is_admin)
+    elif action == "clear_devices":
+        await handle_clear_devices_prompt(callback, user, i18n, current_lang)
+    elif action == "clear_devices_confirm":
+        await handle_clear_devices(callback, user, panel_service, subscription_service,
+                                  session, settings, bot, i18n, current_lang, is_admin)
+    elif action == "transactions":
+        await handle_user_transactions(callback, user, session, settings, i18n, current_lang,
+                                      is_admin, page)
     elif action == "send_message":
         await handle_send_message_prompt(callback, state, user, i18n, current_lang)
     elif action == "view_logs":
-        await handle_view_user_logs(callback, user, session, settings, i18n, current_lang)
+        await handle_view_user_logs(callback, user, session, settings, i18n, current_lang, is_admin)
+    elif action == "noop":
+        # The page counter is a button; tapping it must not redraw anything.
+        await callback.answer()
     elif action == "refresh":
-        await handle_refresh_user_card(callback, user, subscription_service, session, i18n, current_lang)
+        await handle_refresh_user_card(callback, user, subscription_service, session,
+                                      i18n, current_lang, is_admin)
     else:
         await callback.answer(_("admin_unknown_action"), show_alert=True)
 
@@ -331,7 +408,8 @@ async def handle_reset_trial(callback: types.CallbackQuery, user: User,
         ), show_alert=True)
         
         # Refresh user card
-        await handle_refresh_user_card(callback, user, subscription_service, session, i18n_instance, lang)
+        await handle_refresh_user_card(callback, user, subscription_service, session,
+                                       i18n_instance, lang, True)
         
     except Exception as e:
         logging.error(f"Error resetting trial for user {user.user_id}: {e}")
@@ -342,31 +420,35 @@ async def handle_reset_trial(callback: types.CallbackQuery, user: User,
         ), show_alert=True)
 
 
-async def handle_add_subscription_prompt(callback: types.CallbackQuery, state: FSMContext,
-                                       user: User, i18n_instance, lang: str):
-    """Prompt admin to enter subscription days to add"""
+async def handle_subscription_days_prompt(callback: types.CallbackQuery, state: FSMContext,
+                                          user: User, i18n_instance, lang: str,
+                                          removing: bool):
+    """Prompt for the number of subscription days to add or to take away"""
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
-    
+
     await state.update_data(target_user_id=user.user_id)
-    await state.set_state(AdminStates.waiting_for_subscription_days_to_add)
-    
+    await state.set_state(
+        AdminStates.waiting_for_subscription_days_to_remove if removing
+        else AdminStates.waiting_for_subscription_days_to_add)
+
     prompt_text = _(
-        "admin_user_add_subscription_prompt",
-        default="➕ Добавление дней подписки для пользователя {user_id}\n\nВведите количество дней для добавления:",
-        user_id=user.user_id
-    )
-    
+        "admin_user_remove_subscription_prompt" if removing
+        else "admin_user_add_subscription_prompt",
+        user_id=user.user_id)
+
     try:
         await callback.message.edit_text(prompt_text)
     except Exception:
         await callback.message.answer(prompt_text)
-    
+
     await callback.answer()
 
 
 async def handle_toggle_ban(callback: types.CallbackQuery, user: User,
-                          panel_service: PanelApiService, session: AsyncSession,
-                          i18n_instance, lang: str):
+                          panel_service: PanelApiService,
+                          subscription_service: SubscriptionService,
+                          session: AsyncSession, settings: Settings, bot: Bot,
+                          i18n_instance, lang: str, is_admin: bool):
     """Toggle user ban status"""
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     
@@ -376,9 +458,8 @@ async def handle_toggle_ban(callback: types.CallbackQuery, user: User,
         # Update in database
         await user_dal.update_user(session, user.user_id, {"is_banned": new_ban_status})
         
-        # Update on panel if user has panel UUID
+        # Mirror the ban on the panel so the subscription stops serving configs
         if user.panel_user_id:
-            panel_status = "DISABLED" if new_ban_status else "ACTIVE"
             await panel_service.update_user_status_on_panel(user.panel_user_id, not new_ban_status)
         
         await session.commit()
@@ -389,15 +470,12 @@ async def handle_toggle_ban(callback: types.CallbackQuery, user: User,
             default="✅ Пользователь {status}",
             status=status_text
         ), show_alert=True)
-        
-        # Refresh user card with updated ban status
+
         user.is_banned = new_ban_status  # Update local object
-        from config.settings import Settings
-        from bot.services.panel_api_service import PanelApiService
-        settings = Settings()
-        async with PanelApiService(settings) as panel_service:
-            subscription_service = SubscriptionService(settings, panel_service)
-            await handle_refresh_user_card(callback, user, subscription_service, session, i18n_instance, lang)
+        await audit_staff_action(settings, bot, i18n_instance, callback.from_user, user,
+                                 "ban" if new_ban_status else "unban")
+        await handle_refresh_user_card(callback, user, subscription_service, session,
+                                       i18n_instance, lang, is_admin)
         
     except Exception as e:
         logging.error(f"Error toggling ban for user {user.user_id}: {e}")
@@ -430,9 +508,118 @@ async def handle_send_message_prompt(callback: types.CallbackQuery, state: FSMCo
     await callback.answer()
 
 
+async def handle_clear_devices_prompt(callback: types.CallbackQuery, user: User,
+                                      i18n_instance, lang: str):
+    """Ask before wiping devices: it drops every active session of that subscriber."""
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text=_(key="admin_user_clear_devices_confirm_button"),
+                   callback_data=f"user_action:clear_devices_confirm:{user.user_id}")
+    builder.button(text=_(key="admin_user_back_to_card_button", default="🔙 К карточке"),
+                   callback_data=f"user_action:refresh:{user.user_id}")
+    builder.adjust(1)
+
+    prompt_text = _("admin_user_clear_devices_prompt", user_id=user.user_id)
+    try:
+        await callback.message.edit_text(prompt_text, reply_markup=builder.as_markup())
+    except Exception:
+        await callback.message.answer(prompt_text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+async def handle_clear_devices(callback: types.CallbackQuery, user: User,
+                               panel_service: PanelApiService,
+                               subscription_service: SubscriptionService,
+                               session: AsyncSession, settings: Settings, bot: Bot,
+                               i18n_instance, lang: str, is_admin: bool):
+    """Wipe every HWID device of the user on the panel"""
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+
+    if not user.panel_user_id:
+        await callback.answer(_("admin_user_no_panel_account"), show_alert=True)
+        return
+
+    devices = await panel_service.get_user_devices(user.panel_user_id)
+    removed = await panel_service.delete_all_user_devices(user.panel_user_id)
+    if removed is None:
+        await callback.answer(_("admin_user_clear_devices_error"), show_alert=True)
+        return
+
+    device_count = len(devices) if devices is not None else 0
+    await callback.answer(_("admin_user_clear_devices_success", count=device_count),
+                          show_alert=True)
+    await audit_staff_action(settings, bot, i18n_instance, callback.from_user, user,
+                             "clear_devices", f"devices removed: {device_count}")
+    await handle_refresh_user_card(callback, user, subscription_service, session,
+                                   i18n_instance, lang, is_admin)
+
+
+async def handle_user_transactions(callback: types.CallbackQuery, user: User,
+                                   session: AsyncSession, settings: Settings,
+                                   i18n_instance, lang: str, is_admin: bool,
+                                   page: int = 0):
+    """Show one user's payment history, newest first"""
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+
+    total = await payment_dal.count_user_payments(session, user.user_id)
+    if not total:
+        await callback.answer(_("admin_user_no_transactions"), show_alert=True)
+        return
+
+    total_pages = math.ceil(total / TRANSACTIONS_PAGE_SIZE)
+    page = min(max(page, 0), total_pages - 1)
+    payments = await payment_dal.get_user_payments(
+        session, user.user_id, limit=TRANSACTIONS_PAGE_SIZE,
+        offset=page * TRANSACTIONS_PAGE_SIZE)
+
+    entries = []
+    for payment in payments:
+        created_at = payment.created_at.strftime('%Y-%m-%d %H:%M') if payment.created_at else 'N/A'
+        months = payment.subscription_duration_months
+        entries.append(
+            _("admin_user_transaction_entry",
+              payment_id=payment.payment_id,
+              amount=f"{payment.amount:.2f}",
+              currency=hd.quote(payment.currency or ""),
+              status=hd.quote(payment.status or "unknown"),
+              provider=hd.quote(payment.provider or "unknown"),
+              months=months if months is not None else "—",
+              created_at=created_at))
+
+    text = _("admin_user_transactions_title",
+             user_id=user.user_id,
+             total=total) + "\n\n" + "\n\n".join(entries)
+
+    builder = InlineKeyboardBuilder()
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(
+                text="⬅️", callback_data=f"user_action:transactions:{user.user_id}:{page - 1}"))
+        nav.append(InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}",
+            callback_data=f"user_action:noop:{user.user_id}"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(
+                text="➡️", callback_data=f"user_action:transactions:{user.user_id}:{page + 1}"))
+        builder.row(*nav)
+    builder.row(InlineKeyboardButton(
+        text=_(key="admin_user_back_to_card_button", default="🔙 К карточке"),
+        callback_data=f"user_action:refresh:{user.user_id}"))
+
+    try:
+        await callback.message.edit_text(text, reply_markup=builder.as_markup(),
+                                         parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, reply_markup=builder.as_markup(),
+                                       parse_mode="HTML")
+    await callback.answer()
+
+
 async def handle_view_user_logs(callback: types.CallbackQuery, user: User,
                               session: AsyncSession, settings: Settings,
-                              i18n_instance, lang: str):
+                              i18n_instance, lang: str, is_admin: bool = True):
     """Show recent user logs"""
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     
@@ -458,17 +645,19 @@ async def handle_view_user_logs(callback: types.CallbackQuery, user: User,
             
             logs_text_parts.append(
                 f"🕐 {hcode(timestamp)} - {hcode(event_type)}\n"
-                f"   {content_preview}"
+                f"   {hd.quote(content_preview)}"
             )
         
         logs_text = "\n\n".join(logs_text_parts)
         
         # Create inline keyboard for full logs
         builder = InlineKeyboardBuilder()
-        builder.button(
-            text=_(key="admin_user_view_all_logs_button", default="📋 Все действия"),
-            callback_data=f"admin_logs:view_user:{user.user_id}:0"
-        )
+        if is_admin:
+            # The full log browser lives in the admin-only router.
+            builder.button(
+                text=_(key="admin_user_view_all_logs_button", default="📋 Все действия"),
+                callback_data=f"admin_logs:view_user:{user.user_id}:0"
+            )
         builder.button(
             text=_(key="admin_user_back_to_card_button", default="🔙 К карточке"),
             callback_data=f"user_action:refresh:{user.user_id}"
@@ -500,7 +689,8 @@ async def handle_view_user_logs(callback: types.CallbackQuery, user: User,
 
 async def handle_refresh_user_card(callback: types.CallbackQuery, user: User,
                                   subscription_service: SubscriptionService,
-                                  session: AsyncSession, i18n_instance, lang: str):
+                                  session: AsyncSession, i18n_instance, lang: str,
+                                  is_admin: bool = True):
     """Refresh user card with latest information"""
     try:
         # Reload user from database
@@ -513,7 +703,7 @@ async def handle_refresh_user_card(callback: types.CallbackQuery, user: User,
         _settings = _Settings()
         referral_service = ReferralService(_settings, subscription_service, callback.message.bot, i18n_instance)
         user_card_text = await format_user_card(fresh_user, session, subscription_service, i18n_instance, lang, referral_service)
-        keyboard = get_user_card_keyboard(fresh_user.user_id, i18n_instance, lang)
+        keyboard = get_user_card_keyboard(fresh_user.user_id, i18n_instance, lang, is_admin)
         
         try:
             await callback.message.edit_text(
@@ -542,7 +732,24 @@ async def process_subscription_days_handler(message: types.Message, state: FSMCo
                                            settings: Settings, i18n_data: dict,
                                            subscription_service: SubscriptionService,
                                            session: AsyncSession):
-    """Process subscription days input"""
+    await apply_subscription_days(message, state, settings, i18n_data,
+                                  subscription_service, session, removing=False)
+
+
+@router.message(AdminStates.waiting_for_subscription_days_to_remove, F.text)
+async def process_subscription_days_removal_handler(message: types.Message, state: FSMContext,
+                                                   settings: Settings, i18n_data: dict,
+                                                   subscription_service: SubscriptionService,
+                                                   session: AsyncSession):
+    await apply_subscription_days(message, state, settings, i18n_data,
+                                  subscription_service, session, removing=True)
+
+
+async def apply_subscription_days(message: types.Message, state: FSMContext,
+                                  settings: Settings, i18n_data: dict,
+                                  subscription_service: SubscriptionService,
+                                  session: AsyncSession, removing: bool):
+    """Shift the end date of the user's active subscription by the entered days"""
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
     if not i18n:
@@ -558,8 +765,8 @@ async def process_subscription_days_handler(message: types.Message, state: FSMCo
         return
 
     try:
-        days_to_add = int(message.text.strip())
-        if days_to_add <= 0 or days_to_add > 3650:  # Max 10 years
+        days = int(message.text.strip())
+        if days <= 0 or days > MAX_SUBSCRIPTION_DAYS:
             raise ValueError("Invalid days count")
     except ValueError:
         await message.answer(_(
@@ -568,48 +775,65 @@ async def process_subscription_days_handler(message: types.Message, state: FSMCo
         ))
         return
 
+    user = await user_dal.get_user_by_id(session, target_user_id)
+    if not user:
+        await message.answer(_("admin_user_not_found_action", default="Пользователь не найден"))
+        await state.clear()
+        return
+
+    # Taking days away from a user with no active subscription would create one that
+    # already expired, so refuse instead.
+    if removing:
+        active_sub = await subscription_dal.get_active_subscription_by_user_id(
+            session, target_user_id)
+        if not active_sub:
+            await message.answer(_("admin_user_no_active_subscription"))
+            await state.clear()
+            return
+
+    is_admin = settings.is_admin(message.from_user.id)
     try:
-        # Extend subscription
-        result = await subscription_service.extend_active_subscription_days(
-            session, target_user_id, days_to_add, "admin_manual_extension"
-        )
-        
-        if result:
+        new_end_date = await subscription_service.extend_active_subscription_days(
+            session, target_user_id, -days if removing else days,
+            "moderator_manual_change" if not is_admin else "admin_manual_extension")
+
+        if new_end_date:
             await session.commit()
             await message.answer(_(
-                "admin_user_subscription_added_success",
-                default="✅ Успешно добавлено {days} дней подписки пользователю {user_id}",
-                days=days_to_add,
-                user_id=target_user_id
-            ))
-            
-            # Show updated user card
-            user = await user_dal.get_user_by_id(session, target_user_id)
-            if user:
-                referral_service = ReferralService(settings, subscription_service, message.bot, i18n)
-                user_card_text = await format_user_card(user, session, subscription_service, i18n, current_lang, referral_service)
-                keyboard = get_user_card_keyboard(user.user_id, i18n, current_lang)
-                
-                await message.answer(
-                    user_card_text,
-                    reply_markup=keyboard.as_markup(),
-                    parse_mode="HTML"
-                )
+                "admin_user_subscription_removed_success" if removing
+                else "admin_user_subscription_added_success",
+                days=days,
+                user_id=target_user_id,
+                end_date=new_end_date.strftime('%Y-%m-%d %H:%M')))
+
+            await audit_staff_action(
+                settings, message.bot, i18n, message.from_user, user,
+                "remove_days" if removing else "add_days",
+                f"{'-' if removing else '+'}{days} days, new end date "
+                f"{new_end_date.strftime('%Y-%m-%d %H:%M')} UTC")
+
+            referral_service = ReferralService(settings, subscription_service, message.bot, i18n)
+            user_card_text = await format_user_card(user, session, subscription_service,
+                                                    i18n, current_lang, referral_service)
+            keyboard = get_user_card_keyboard(user.user_id, i18n, current_lang, is_admin)
+            await message.answer(user_card_text, reply_markup=keyboard.as_markup(),
+                                 parse_mode="HTML")
         else:
             await session.rollback()
             await message.answer(_(
                 "admin_user_subscription_added_error",
                 default="❌ Ошибка добавления дней подписки"
             ))
-    
+
     except Exception as e:
-        logging.error(f"Error adding subscription days for user {target_user_id}: {e}")
+        logging.error(
+            f"Error changing subscription days for user {target_user_id}: {e}")
         await session.rollback()
         await message.answer(_(
             "admin_user_subscription_added_error",
             default="❌ Ошибка добавления дней подписки"
         ))
-    
+
     await state.clear()
 
 
@@ -690,6 +914,9 @@ async def process_direct_message_handler(message: types.Message, state: FSMConte
             default="✅ Сообщение отправлено пользователю {user_id}",
             user_id=target_user_id
         ))
+
+        await audit_staff_action(settings, bot, i18n, message.from_user, target_user,
+                                 "direct_message")
         
         # Show user card again  
         from bot.services.panel_api_service import PanelApiService

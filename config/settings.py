@@ -10,6 +10,10 @@ class Settings(BaseSettings):
         default="",
         alias="ADMIN_IDS",
         description="Comma-separated list of admin Telegram User IDs")
+    MODERATOR_IDS_STR: str = Field(
+        default="",
+        alias="MODERATOR_IDS",
+        description="Comma-separated list of moderator Telegram User IDs")
 
     POSTGRES_USER: str = Field(default="user")
     POSTGRES_PASSWORD: str = Field(default="password")
@@ -138,19 +142,35 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def ADMIN_IDS(self) -> List[int]:
-        if self.ADMIN_IDS_STR:
-            try:
-                return [
-                    int(admin_id.strip())
-                    for admin_id in self.ADMIN_IDS_STR.split(',')
-                    if admin_id.strip().isdigit()
-                ]
-            except ValueError:
-                logging.error(
-                    f"Invalid ADMIN_IDS_STR format: '{self.ADMIN_IDS_STR}'. Expected comma-separated integers."
-                )
-                return []
-        return []
+        return self._parse_telegram_ids(self.ADMIN_IDS_STR, "ADMIN_IDS")
+
+    @computed_field
+    @property
+    def MODERATOR_IDS(self) -> List[int]:
+        """Staff with access to a single user's card, nothing global."""
+        return [
+            user_id for user_id in self._parse_telegram_ids(
+                self.MODERATOR_IDS_STR, "MODERATOR_IDS")
+            if user_id not in self.ADMIN_IDS
+        ]
+
+    @staticmethod
+    def _parse_telegram_ids(raw: str, field_name: str) -> List[int]:
+        if not raw:
+            return []
+        ids = [part.strip() for part in raw.split(',') if part.strip()]
+        parsed = [int(value) for value in ids if value.isdigit()]
+        if len(parsed) != len(ids):
+            logging.error(
+                f"Invalid {field_name} format: '{raw}'. Expected comma-separated integers."
+            )
+        return parsed
+
+    def is_admin(self, user_id: int) -> bool:
+        return user_id in self.ADMIN_IDS
+
+    def is_moderator(self, user_id: int) -> bool:
+        return user_id in self.MODERATOR_IDS
 
     @computed_field
     @property
@@ -323,14 +343,35 @@ class Settings(BaseSettings):
     # Logging Configuration
     LOG_CHAT_ID: Optional[int] = Field(default=None, description="Telegram chat/group ID for sending notifications")
     LOG_THREAD_ID: Optional[int] = Field(default=None, description="Thread ID for supergroup messages (optional)")
-    
-    @field_validator('LOG_CHAT_ID', 'LOG_THREAD_ID', mode='before')
+    AUDIT_LOG_CHAT_ID: Optional[int] = Field(
+        default=None,
+        description="Telegram chat/channel ID receiving the staff audit log. Falls back to LOG_CHAT_ID")
+    AUDIT_LOG_THREAD_ID: Optional[int] = Field(
+        default=None,
+        description="Thread ID inside the audit chat (optional)")
+
+    @field_validator('LOG_CHAT_ID', 'LOG_THREAD_ID', 'AUDIT_LOG_CHAT_ID',
+                     'AUDIT_LOG_THREAD_ID', mode='before')
     @classmethod
     def validate_optional_int_fields(cls, v):
         """Convert empty strings to None for optional integer fields"""
         if isinstance(v, str) and v.strip() == '':
             return None
         return v
+
+    @computed_field
+    @property
+    def audit_log_chat_id(self) -> Optional[int]:
+        """Where staff actions are recorded. The dedicated chat if configured, otherwise
+        the general log chat — never an admin's private chat."""
+        return self.AUDIT_LOG_CHAT_ID or self.LOG_CHAT_ID
+
+    @computed_field
+    @property
+    def audit_log_thread_id(self) -> Optional[int]:
+        if self.AUDIT_LOG_CHAT_ID:
+            return self.AUDIT_LOG_THREAD_ID
+        return self.AUDIT_LOG_THREAD_ID or self.LOG_THREAD_ID
     
     # Notification types
     LOG_NEW_USERS: bool = Field(default=True, description="Send notifications for new user registrations")

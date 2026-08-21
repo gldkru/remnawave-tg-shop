@@ -35,45 +35,38 @@ class NotificationService:
             base_display = f"{base_display} ({username_for_display(username)})"
         return base_display
     
+    async def _send_to_chat(self, message: str, chat_id: int,
+                            thread_id: Optional[int] = None):
+        """Send one message to a chat/channel id, through the queue when it is up."""
+        queue_manager = get_queue_manager()
+        kwargs: Dict[str, Any] = {
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if thread_id:
+            kwargs["message_thread_id"] = thread_id
+
+        if not queue_manager:
+            logging.warning("Message queue manager not available, falling back to direct send")
+            try:
+                await self.bot.send_message(chat_id=chat_id, **kwargs)
+            except Exception as e:
+                logging.error(f"Failed to send notification to chat {chat_id}: {e}")
+            return
+
+        try:
+            # Groups are rate limited to 15 messages a minute, hence the queue.
+            await queue_manager.send_message(chat_id, **kwargs)
+        except Exception as e:
+            logging.error(f"Failed to queue notification to chat {chat_id}: {e}")
+
     async def _send_to_log_channel(self, message: str, thread_id: Optional[int] = None):
         """Send message to configured log channel/group using message queue"""
         if not self.settings.LOG_CHAT_ID:
             return
-        
-        queue_manager = get_queue_manager()
-        if not queue_manager:
-            logging.warning("Message queue manager not available, falling back to direct send")
-            try:
-                await self.bot.send_message(
-                    chat_id=self.settings.LOG_CHAT_ID,
-                    text=message,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                    message_thread_id=thread_id or self.settings.LOG_THREAD_ID
-                )
-            except Exception as e:
-                logging.error(f"Failed to send notification to log channel {self.settings.LOG_CHAT_ID}: {e}")
-            return
-        
-        try:
-            # Use thread_id if provided, otherwise use from settings
-            final_thread_id = thread_id or self.settings.LOG_THREAD_ID
-            
-            kwargs = {
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True
-            }
-            
-            # Add thread ID for supergroups if specified
-            if final_thread_id:
-                kwargs["message_thread_id"] = final_thread_id
-            
-            # Queue message for sending (groups are rate limited to 15/minute)
-            await queue_manager.send_message(self.settings.LOG_CHAT_ID, **kwargs)
-            
-        except Exception as e:
-            logging.error(f"Failed to queue notification to log channel {self.settings.LOG_CHAT_ID}: {e}")
+        await self._send_to_chat(message, self.settings.LOG_CHAT_ID,
+                                 thread_id or self.settings.LOG_THREAD_ID)
     
     async def _send_to_admins(self, message: str):
         """Send message to all admin users using message queue"""
@@ -309,6 +302,43 @@ class NotificationService:
         # Send to log channel
         await self._send_to_log_channel(message)
     
+    async def notify_staff_action(self,
+                                 actor_id: int,
+                                 actor_role: str,
+                                 action: str,
+                                 target_user_id: int,
+                                 details: Optional[str] = None,
+                                 actor_username: Optional[str] = None,
+                                 target_username: Optional[str] = None):
+        """Record one staff action on one user in the audit chat.
+
+        Goes to a chat id, never to an admin's private messages: an audit trail nobody
+        can quietly delete from their own history is the point.
+        """
+        chat_id = self.settings.audit_log_chat_id
+        if not chat_id:
+            logging.warning(
+                f"Audit log chat is not configured: {actor_role} {actor_id} ran "
+                f"'{action}' on user {target_user_id} with no record sent.")
+            return
+
+        actor_display = self._format_user_display(actor_id, actor_username)
+        target_display = self._format_user_display(target_user_id, target_username)
+        lines = [
+            "🛡 <b>Аудит: действие персонала</b>",
+            "",
+            f"👮 {hd.quote(actor_role)}: {hd.quote(actor_display)} (<code>{actor_id}</code>)",
+            f"🎯 Пользователь: {hd.quote(target_display)} (<code>{target_user_id}</code>)",
+            f"⚙️ Действие: <b>{hd.quote(action)}</b>",
+        ]
+        if details:
+            lines.append(f"📄 {hd.quote(details)}")
+        lines.append(
+            f"🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+
+        await self._send_to_chat("\n".join(lines), chat_id,
+                                 self.settings.audit_log_thread_id)
+
     async def send_custom_notification(self, message: str, to_admins: bool = False, 
                                      to_log_channel: bool = True, thread_id: Optional[int] = None):
         """Send custom notification message"""
