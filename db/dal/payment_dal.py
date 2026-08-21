@@ -8,6 +8,24 @@ from sqlalchemy.orm import selectinload
 from db.models import Payment, User
 
 
+async def get_user_payments(session: AsyncSession,
+                            user_id: int,
+                            limit: int = 5,
+                            offset: int = 0) -> List[Payment]:
+    """One user's payment history, newest first, every status included."""
+    stmt = (select(Payment).where(Payment.user_id == user_id).order_by(
+        Payment.created_at.desc()).limit(limit).offset(offset))
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def count_user_payments(session: AsyncSession, user_id: int) -> int:
+    stmt = select(func.count(Payment.payment_id)).where(
+        Payment.user_id == user_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() or 0
+
+
 async def create_payment_record(session: AsyncSession,
                                 payment_data: Dict[str, Any]) -> Payment:
 
