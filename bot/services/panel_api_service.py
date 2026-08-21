@@ -472,6 +472,60 @@ class PanelApiService:
             return f"{base_sub_url}/{client_type.lower()}"
         return base_sub_url
 
+    async def get_user_devices(
+            self, panel_user_id: int) -> Optional[List[Dict[str, Any]]]:
+        # 3.x keys HWID devices on the numeric user id, like every other user route.
+        endpoint = f"/hwid/devices/{panel_user_id}"
+        response_data = await self._request("GET",
+                                            endpoint,
+                                            log_full_response=False)
+        if response_data and not response_data.get("error") and isinstance(
+                response_data.get("response"), dict):
+            return response_data["response"].get("devices") or []
+
+        logging.error(
+            f"Failed to get HWID devices of panel user {panel_user_id}. Response: {response_data}"
+        )
+        return None
+
+    async def delete_user_device(self, panel_user_id: int, hwid: str) -> bool:
+        payload = {"userId": int(panel_user_id), "hwid": hwid}
+        response_data = await self._request("POST",
+                                            "/hwid/devices/delete",
+                                            json=payload,
+                                            log_full_response=False)
+        if response_data and not response_data.get(
+                "error") and "response" in response_data:
+            logging.info(
+                f"Deleted HWID device of panel user {panel_user_id}.")
+            return True
+
+        logging.error(
+            f"Failed to delete an HWID device of panel user {panel_user_id}. Response: {response_data}"
+        )
+        return False
+
+    async def get_hwid_fallback_device_limit(self) -> Optional[int]:
+        """Panel-wide device limit that applies while a user has no personal one.
+
+        It lives in subscription settings, not in the HWID routes, and None means
+        "no limit to show" — either HWID checks are off or the panel did not answer.
+        """
+        response_data = await self._request("GET",
+                                            "/subscription-settings",
+                                            log_full_response=False)
+        if response_data and not response_data.get("error") and isinstance(
+                response_data.get("response"), dict):
+            hwid_settings = response_data["response"].get("hwidSettings") or {}
+            if hwid_settings.get("enabled"):
+                return hwid_settings.get("fallbackDeviceLimit")
+            return None
+
+        logging.error(
+            f"Failed to read HWID settings from the panel. Response: {response_data}"
+        )
+        return None
+
     async def update_bot_db_sync_status(self,
                                         session: AsyncSession,
                                         status: str,
