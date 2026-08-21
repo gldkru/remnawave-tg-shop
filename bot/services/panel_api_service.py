@@ -488,6 +488,21 @@ class PanelApiService:
         )
         return None
 
+    async def delete_all_user_devices(self, panel_user_id: int) -> Optional[int]:
+        """Wipe every HWID device of one user. Returns how many are left, None on failure."""
+        response_data = await self._request("POST",
+                                            "/hwid/devices/delete-all",
+                                            json={"userId": int(panel_user_id)},
+                                            log_full_response=False)
+        if response_data and not response_data.get("error") and isinstance(
+                response_data.get("response"), dict):
+            return len(response_data["response"].get("devices") or [])
+
+        logging.error(
+            f"Failed to delete all HWID devices of panel user {panel_user_id}. Response: {response_data}"
+        )
+        return None
+
     async def delete_user_device(self, panel_user_id: int, hwid: str) -> bool:
         payload = {"userId": int(panel_user_id), "hwid": hwid}
         response_data = await self._request("POST",

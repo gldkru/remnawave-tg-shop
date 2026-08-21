@@ -27,6 +27,7 @@ class AdminStates(StatesGroup):
     # User management states
     waiting_for_user_search = State()
     waiting_for_subscription_days_to_add = State()
+    waiting_for_subscription_days_to_remove = State()
     waiting_for_direct_message_to_user = State()
 
     # Ads campaigns

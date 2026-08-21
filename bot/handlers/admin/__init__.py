@@ -15,11 +15,16 @@ admin_router_aggregate = Router(name="admin_features_router")
 admin_router_aggregate.include_router(common.router)
 admin_router_aggregate.include_router(broadcast.router)
 admin_router_aggregate.include_router(promo_router_aggregate)
-admin_router_aggregate.include_router(user_management.router)
 admin_router_aggregate.include_router(statistics.router)
 admin_router_aggregate.include_router(sync_admin.router)
 admin_router_aggregate.include_router(logs_admin.router)
 admin_router_aggregate.include_router(payments.router)
 admin_router_aggregate.include_router(ads.router)
 
-__all__ = ("admin_router_aggregate", )
+# Shared with moderators: the card of one user and the actions scoped to them.
+# Every action inside re-checks the caller's role.
+staff_router_aggregate = Router(name="staff_features_router")
+
+staff_router_aggregate.include_router(user_management.router)
+
+__all__ = ("admin_router_aggregate", "staff_router_aggregate")

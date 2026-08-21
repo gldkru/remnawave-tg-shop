@@ -37,6 +37,16 @@ def get_admin_panel_keyboard(i18n_instance, lang: str,
     return builder.as_markup()
 
 
+def get_moderator_panel_keyboard(i18n_instance, lang: str) -> InlineKeyboardMarkup:
+    """A moderator sees one entry point: a single user's card. Nothing global."""
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    builder = InlineKeyboardBuilder()
+    builder.button(text=_(key="moderator_find_user_button"),
+                   callback_data="moderator_action:find_user")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def get_stats_monitoring_keyboard(i18n_instance, lang: str) -> InlineKeyboardMarkup:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()
