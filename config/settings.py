@@ -256,18 +256,18 @@ class Settings(BaseSettings):
             return f"{base.rstrip('/')}{self.cryptopay_webhook_path}"
         return None
 
-    # Computed YooKassa receipt fields based on recurring toggle
+    # Computed YooKassa receipt fields (54-FZ) based on recurring toggle.
+    # payment_mode and payment_subject are separate enums, do not swap them:
+    # https://yookassa.ru/developers/payment-acceptance/receipts/54fz/yoomoney/parameters-values
     @computed_field
     @property
     def yk_receipt_payment_mode(self) -> str:
-        # If autopayments are enabled, use service; otherwise full prepayment
-        return "service" if self.YOOKASSA_AUTOPAYMENTS_ENABLED else "full_prepayment"
+        return "full_payment" if self.YOOKASSA_AUTOPAYMENTS_ENABLED else "full_prepayment"
 
     @computed_field
     @property
     def yk_receipt_payment_subject(self) -> str:
-        # If autopayments are enabled, use full_payment; otherwise payment
-        return "full_payment" if self.YOOKASSA_AUTOPAYMENTS_ENABLED else "payment"
+        return "service" if self.YOOKASSA_AUTOPAYMENTS_ENABLED else "payment"
 
     @computed_field
     @property
