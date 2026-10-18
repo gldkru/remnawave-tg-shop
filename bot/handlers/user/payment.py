@@ -29,6 +29,11 @@ payment_processing_lock = asyncio.Lock()
 YOOKASSA_EVENT_PAYMENT_SUCCEEDED = 'payment.succeeded'
 YOOKASSA_EVENT_PAYMENT_CANCELED = 'payment.canceled'
 YOOKASSA_EVENT_PAYMENT_WAITING_FOR_CAPTURE = 'payment.waiting_for_capture'
+YOOKASSA_EVENT_EXPECTED_STATUS = {
+    YOOKASSA_EVENT_PAYMENT_SUCCEEDED: 'succeeded',
+    YOOKASSA_EVENT_PAYMENT_CANCELED: 'canceled',
+    YOOKASSA_EVENT_PAYMENT_WAITING_FOR_CAPTURE: 'waiting_for_capture',
+}
 
 
 async def process_successful_payment(session: AsyncSession, bot: Bot,
@@ -393,12 +398,33 @@ async def yookassa_webhook_route(request: web.Request):
         event_json = await request.json()
 
         notification_object = WebhookNotification(event_json)
-        payment_data_from_notification = notification_object.object
+        notified_id = str(getattr(notification_object.object, 'id', '') or '')
 
         logging.info(
             f"YooKassa Webhook Parsed: Event='{notification_object.event}', "
-            f"PaymentId='{payment_data_from_notification.id}', Status='{payment_data_from_notification.status}'"
+            f"PaymentId='{notified_id}', Status='{getattr(notification_object.object, 'status', None)}'"
         )
+
+        # The notification body is unauthenticated: anyone can POST it. Act only on the
+        # payment as YooKassa's API reports it for this shop, and only when its status
+        # matches the event (a payment.succeeded hint for a pending payment is ignored).
+        yookassa_service: YooKassaService = request.app['yookassa_service']
+        payment_data_from_notification, lookup_error = await yookassa_service.fetch_payment(notified_id)
+        if lookup_error:
+            # Non-2xx makes YooKassa redeliver the notification later.
+            return web.Response(status=503, text="payment_lookup_failed")
+        if payment_data_from_notification is None:
+            logging.warning(
+                f"YooKassa webhook for unknown payment '{notified_id}' ignored (not found for this shop)"
+            )
+            return web.Response(status=200, text="ok_ignored_unknown_payment")
+        expected_status = YOOKASSA_EVENT_EXPECTED_STATUS.get(notification_object.event)
+        if expected_status and payment_data_from_notification.status != expected_status:
+            logging.warning(
+                f"YooKassa webhook '{notification_object.event}' for {notified_id} ignored: "
+                f"API status is '{payment_data_from_notification.status}'"
+            )
+            return web.Response(status=200, text="ok_ignored_status_mismatch")
 
         if not payment_data_from_notification or not hasattr(
                 payment_data_from_notification,
