@@ -1,11 +1,14 @@
 import uuid
 import logging
 import asyncio
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from yookassa import Configuration, Payment as YooKassaPayment
 from yookassa.domain.request.payment_request_builder import PaymentRequestBuilder
 from yookassa.domain.common.confirmation_type import ConfirmationType
+from yookassa.domain.exceptions.bad_request_error import BadRequestError
+from yookassa.domain.exceptions.not_found_error import NotFoundError
+from yookassa.domain.response.payment_response import PaymentResponse
 
 from config.settings import Settings
 
@@ -199,6 +202,29 @@ class YooKassaService:
             logging.error(f"YooKassa payment creation failed: {e}",
                           exc_info=True)
             return None
+
+    async def fetch_payment(
+            self, payment_id: str) -> Tuple[Optional[PaymentResponse], Optional[str]]:
+        """Payment as YooKassa's API reports it, for checking an incoming notification.
+
+        Returns (payment, None) when found, (None, None) when this shop does not know
+        the id (a forged or foreign notification), and (None, error) when the API could
+        not answer and the notification should be retried.
+        """
+        if not self.configured:
+            return None, "YooKassa is not configured"
+        if not isinstance(payment_id, str) or not payment_id:
+            return None, None
+        try:
+            loop = asyncio.get_running_loop()
+            payment = await loop.run_in_executor(
+                None, lambda: YooKassaPayment.find_one(payment_id))
+            return payment, None
+        except (NotFoundError, BadRequestError):
+            return None, None
+        except Exception as e:
+            logging.error(f"YooKassa lookup of payment {payment_id} failed: {e}")
+            return None, str(e)
 
     async def get_payment_info(
             self, payment_id_in_yookassa: str) -> Optional[Dict[str, Any]]:
