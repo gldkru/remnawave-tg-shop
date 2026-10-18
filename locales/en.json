@@ -272,6 +272,7 @@
   "admin_user_transactions_title": "💳 <b>Transactions of user {user_id}</b> (total: {total})",
   "admin_user_transaction_entry": "#{payment_id} · <b>{amount} {currency}</b> · {status}\nProvider: {provider} · Months: {months}\nCreated: {created_at}",
   "staff_action_forbidden": "⛔️ Not enough rights for this action",
+  "moderator_back_to_panel_button": "⬅️ Back to moderator panel",
   "moderator_panel_title": "🛡 Moderator panel\n\nOne user's card only: subscription, transactions, devices.",
   "moderator_find_user_button": "🔍 Find user",
   "admin_user_subscription_added_error": "❌ Error adding subscription days",

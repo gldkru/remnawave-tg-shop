@@ -271,6 +271,7 @@
   "admin_user_transactions_title": "💳 <b>Транзакции пользователя {user_id}</b> (всего: {total})",
   "admin_user_transaction_entry": "#{payment_id} · <b>{amount} {currency}</b> · {status}\nПровайдер: {provider} · Месяцев: {months}\nСоздана: {created_at}",
   "staff_action_forbidden": "⛔️ Недостаточно прав для этого действия",
+  "moderator_back_to_panel_button": "⬅️ В панель модератора",
   "moderator_panel_title": "🛡 Панель модератора\n\nДоступна карточка одного пользователя: подписка, транзакции, устройства.",
   "moderator_find_user_button": "🔍 Найти пользователя",
   "admin_user_subscription_added_error": "❌ Ошибка добавления дней подписки",

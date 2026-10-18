@@ -139,7 +139,8 @@ def get_user_card_keyboard(user_id: int, i18n_instance, lang: str,
         callback_data="admin_action:users_management" if is_admin else "moderator_action:find_user"
     )
     builder.button(
-        text=_(key="back_to_admin_panel_button"),
+        text=_(key="back_to_admin_panel_button") if is_admin
+        else _(key="moderator_back_to_panel_button"),
         callback_data="admin_action:main" if is_admin else "moderator_action:main"
     )
 
