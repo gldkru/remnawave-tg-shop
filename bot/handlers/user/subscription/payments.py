@@ -235,10 +235,21 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
                 pass
             return
 
+        # save_payment_method=true is unconditional saving: YooKassa requires the
+        # merchant to state the autopay terms and get consent before the payment.
+        if getattr(settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False):
+            link_text = get_text(
+                key="payment_link_message_autopay",
+                months=months,
+                price=f"{price_rub:g}",
+                terms_url=settings.TERMS_OF_SERVICE_URL or "",
+            )
+        else:
+            link_text = get_text(key="payment_link_message", months=months)
         await callback.message.edit_text(
-            get_text(key="payment_link_message", months=months),
+            link_text,
             reply_markup=get_payment_url_keyboard(payment_response_yk["confirmation_url"], current_lang, i18n),
-            disable_web_page_preview=False,
+            disable_web_page_preview=True,
         )
     else:
         try:

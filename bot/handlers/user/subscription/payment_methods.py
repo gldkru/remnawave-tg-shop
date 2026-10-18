@@ -98,7 +98,11 @@ async def payment_method_bind(callback: types.CallbackQuery, settings: Settings,
     if not resp or not resp.get("confirmation_url"):
         await callback.answer(_("error_payment_gateway"), show_alert=True)
         return
-    await callback.message.edit_text(_("payment_methods_title"), reply_markup=get_bind_url_keyboard(resp["confirmation_url"], current_lang, i18n))
+    await callback.message.edit_text(
+        _("payment_method_bind_notice", terms_url=settings.TERMS_OF_SERVICE_URL or ""),
+        reply_markup=get_bind_url_keyboard(resp["confirmation_url"], current_lang, i18n),
+        disable_web_page_preview=True,
+    )
     try:
         await callback.answer()
     except Exception:
