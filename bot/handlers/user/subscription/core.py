@@ -113,7 +113,13 @@ async def my_subscription_command_handler(
         )
         back_markup = get_back_to_main_menu_markup(current_lang, i18n)
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[[buy_button], *back_markup.inline_keyboard])
+        rows = [[buy_button]]
+        # A saved card must stay removable after the subscription has lapsed.
+        if getattr(settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False):
+            rows.append([
+                InlineKeyboardButton(text=get_text("payment_methods_manage_button"), callback_data="pm:manage")
+            ])
+        kb = InlineKeyboardMarkup(inline_keyboard=[*rows, *back_markup.inline_keyboard])
 
         if isinstance(event, types.CallbackQuery):
             try:
