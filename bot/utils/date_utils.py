@@ -1,4 +1,22 @@
 from datetime import datetime, timedelta
+from typing import Optional
+
+# Russian needs the genitive after a day number ("12 декабря"), not the nominative ("декабрь").
+_RU_MONTHS_GENITIVE = (
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+_EN_MONTHS = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+
+
+def format_long_date(dt: datetime, lang: Optional[str]) -> str:
+    """Human date for user-facing text: '12 декабря 2026' (ru), 'December 12, 2026' (other)."""
+    if (lang or "").lower().startswith("ru"):
+        return f"{dt.day} {_RU_MONTHS_GENITIVE[dt.month - 1]} {dt.year}"
+    return f"{_EN_MONTHS[dt.month - 1]} {dt.day}, {dt.year}"
 
 
 def add_months(base_dt: datetime, months_to_add: int) -> datetime:
