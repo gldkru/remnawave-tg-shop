@@ -15,8 +15,6 @@ from typing import Any, Dict, List, Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError, TelegramRetryAfter
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.orm import sessionmaker
 
 from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
@@ -174,24 +172,13 @@ class GiftCampaignService:
                 return "panel_activate_failed"
         return None
 
-    def _gift_keyboard(self, lang: str, config_link: Optional[str]) -> InlineKeyboardMarkup:
-        # Connect opens the subscription page itself, not the mini app: the mini app validates
-        # Telegram initData against its own copy of the bot token and fails silently when that
-        # copy is stale, and a gift nobody can open is worse than a plainer page.
-        if not config_link:
-            return get_connect_and_main_keyboard(lang, self.i18n, self.settings, None)
-        builder = InlineKeyboardBuilder()
-        builder.row(InlineKeyboardButton(text=self.i18n.gettext(lang, "connect_button"), url=config_link))
-        builder.row(InlineKeyboardButton(text=self.i18n.gettext(lang, "back_to_main_menu_button"),
-                                         callback_data="main_action:back_to_main"))
-        return builder.as_markup()
-
     async def _send_gift_message(self, message_key: str, user: User, days: int, new_end: datetime,
                                  config_link: Optional[str]) -> str:
         lang = user.language_code or self.settings.DEFAULT_LANGUAGE
         text = self.i18n.gettext(lang, message_key, days=format_days(days, lang),
                                  end_date=format_long_date(new_end, lang))
-        markup = self._gift_keyboard(lang, config_link)
+        # Same connect button as the subscription screen: the mini app when configured.
+        markup = get_connect_and_main_keyboard(lang, self.i18n, self.settings, config_link)
         for attempt in range(2):
             try:
                 await self.bot.send_message(user.user_id, text, reply_markup=markup)
