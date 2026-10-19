@@ -114,10 +114,14 @@ class YooKassaService:
                 capture = False
                 amount = max(amount, 1.00)
             builder.set_capture(capture)
-            builder.set_confirmation({
-                "type": ConfirmationType.REDIRECT,
-                "return_url": self.return_url
-            })
+            if not payment_method_id:
+                # Off-session auto-renew charges use a saved method: YooKassa's documented
+                # autopayment request carries no confirmation, and with one the payment can
+                # wait for the customer instead of being charged.
+                builder.set_confirmation({
+                    "type": ConfirmationType.REDIRECT,
+                    "return_url": self.return_url
+                })
             builder.set_description(description)
             builder.set_metadata(metadata)
             if save_payment_method:

@@ -100,6 +100,35 @@ def _backfill_subscription_panel_user_id(connection: Connection) -> None:
             f"Migrator: backfilled panel_user_id for {result.rowcount} subscriptions"
         )
 
+def _backfill_user_payment_methods_from_billing(connection: Connection) -> None:
+    """
+    Cards saved during a purchase used to be written only to the legacy user_billing row,
+    while auto-renew charges and the Payment Methods screen read user_payment_methods.
+    Copy them over for users who have no method on file yet, so they can be charged and
+    removed. Users who already have one keep it: every payment yields its own token for
+    the same card, and a second row would only duplicate it.
+    """
+    tables = set(inspect(connection).get_table_names())
+    if not {"user_billing", "user_payment_methods"} <= tables:
+        return
+    result = connection.execute(
+        text(
+            "INSERT INTO user_payment_methods "
+            "(user_id, provider, provider_payment_method_id, card_last4, card_network, is_default) "
+            "SELECT b.user_id, 'yookassa', b.yookassa_payment_method_id, b.card_last4, b.card_network, TRUE "
+            "FROM user_billing b "
+            "WHERE b.yookassa_payment_method_id IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM user_payment_methods m WHERE m.user_id = b.user_id) "
+            "AND NOT EXISTS (SELECT 1 FROM user_payment_methods m "
+            "WHERE m.provider_payment_method_id = b.yookassa_payment_method_id)"
+        )
+    )
+    if result.rowcount:
+        logging.info(
+            f"Migrator: copied {result.rowcount} saved card(s) from user_billing to user_payment_methods"
+        )
+
+
 def run_simple_migrations(connection: Connection) -> None:
     """
     Run lightweight, idempotent migrations:
@@ -110,6 +139,7 @@ def run_simple_migrations(connection: Connection) -> None:
         _add_missing_columns(connection)
         _relax_legacy_panel_uuid_columns(connection)
         _backfill_subscription_panel_user_id(connection)
+        _backfill_user_payment_methods_from_billing(connection)
         logging.info("Migrator: schema synchronized (columns added as needed).")
     except Exception as e:
         logging.error(f"Migrator: failed to run simple migrations: {e}", exc_info=True)

@@ -797,10 +797,19 @@ class SubscriptionService:
             return True
 
         from db.dal.user_billing_dal import get_user_default_payment_method
+        from .notification_service import NotificationService  # local import to avoid cycles
+        audit = NotificationService(self.bot, self.settings, self.i18n)
+        months = sub.duration_months or 1
+        amount = self.settings.subscription_options.get(months)
+
         default_pm = await get_user_default_payment_method(session, sub.user_id)
         if not default_pm:
             logging.info(f"Auto-renew skipped: no saved payment method for user {sub.user_id}")
+            await audit.notify_autopay_event(sub.user_id, "charge_skipped", amount=amount, months=months,
+                                             reason="нет сохранённой карты")
             return False
+        card_display = (f"{default_pm.card_network} •••• {default_pm.card_last4}"
+                        if default_pm.card_last4 else default_pm.card_network)
 
         try:
             from .yookassa_service import YooKassaService  # local import to avoid cycles
@@ -809,12 +818,14 @@ class SubscriptionService:
             yk = None  # type: ignore
         if not yk or not getattr(yk, 'configured', False):
             logging.warning("YooKassa unavailable for auto-renew")
+            await audit.notify_autopay_event(sub.user_id, "charge_skipped", card=card_display,
+                                             amount=amount, months=months, reason="ЮKassa не настроена")
             return False
 
-        months = sub.duration_months or 1
-        amount = self.settings.subscription_options.get(months)
         if not amount:
             logging.error(f"Auto-renew price missing for {months} months")
+            await audit.notify_autopay_event(sub.user_id, "charge_skipped", card=card_display, months=months,
+                                             reason=f"нет цены для срока {months} мес.")
             return False
 
         metadata = {
@@ -825,7 +836,7 @@ class SubscriptionService:
         resp = await yk.create_payment(
             amount=float(amount),
             currency="RUB",
-            description=f"Auto-renewal for {months} months",
+            description=f"Автопродление подписки на {months} мес.",
             metadata=metadata,
             payment_method_id=default_pm.provider_payment_method_id,
             save_payment_method=False,
@@ -833,8 +844,13 @@ class SubscriptionService:
         )
         if not resp or resp.get("status") not in {"pending", "waiting_for_capture", "succeeded"}:
             logging.error(f"Auto-renew create_payment failed: {resp}")
+            await audit.notify_autopay_event(
+                sub.user_id, "charge_skipped", card=card_display, amount=amount, months=months,
+                reason=f"ЮKassa отклонила запрос: {(resp or {}).get('message') or (resp or {}).get('status') or 'нет ответа'}")
             return False
         logging.info(f"Auto-renew initiated for user {sub.user_id} payment_id={resp.get('id')}")
+        await audit.notify_autopay_event(sub.user_id, "charge_started", card=card_display,
+                                         amount=amount, months=months)
         return True
 
     async def update_last_notification_sent(

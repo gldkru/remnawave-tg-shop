@@ -175,6 +175,31 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
                     card_last4=display_last4,
                     card_network=display_network,
                 )
+                # Auto-renew charges and the Payment Methods screen read user_payment_methods,
+                # so a card saved during a purchase must land there too, or it can be neither
+                # charged nor removed by the customer. Every payment gets its own token, so a
+                # card the customer already has on file keeps its existing row.
+                existing_methods = await user_billing_dal.list_user_payment_methods(session, user_id)
+                already_on_file = any(
+                    m.provider_payment_method_id == pm_id
+                    or (display_last4 and m.card_last4 == display_last4 and m.card_network == display_network)
+                    for m in existing_methods
+                )
+                if not already_on_file:
+                    await user_billing_dal.upsert_user_payment_method(
+                        session,
+                        user_id=user_id,
+                        provider_payment_method_id=pm_id,
+                        provider="yookassa",
+                        card_last4=display_last4,
+                        card_network=display_network,
+                        set_default=True,
+                    )
+                    await NotificationService(bot, settings, i18n).notify_autopay_event(
+                        user_id, "card_bound",
+                        card=f"{display_network} •••• {display_last4}" if display_last4 else display_network,
+                        reason="сохранена при оплате",
+                    )
         except Exception:
             logging.exception("Failed to persist YooKassa payment method from webhook")
         updated_payment_record = await payment_dal.update_payment_status_by_db_id(
@@ -331,6 +356,19 @@ async def process_cancelled_payment(session: AsyncSession, bot: Bot,
     user_id_str = metadata.get("user_id")
     payment_db_id_str = metadata.get("payment_db_id")
 
+    # Auto-renew charges carry no payment_db_id: they are created off-session in
+    # SubscriptionService.charge_subscription_renewal, so a decline only gets audited.
+    if metadata.get("auto_renew_for_subscription_id") and user_id_str and user_id_str.isdigit():
+        amount_value = (payment_info_from_webhook.get("amount") or {}).get("value")
+        months_str = metadata.get("subscription_months")
+        await NotificationService(bot, settings, i18n).notify_autopay_event(
+            int(user_id_str), "charge_declined",
+            amount=float(amount_value) if amount_value else None,
+            months=int(months_str) if months_str and months_str.isdigit() else None,
+            reason=payment_info_from_webhook.get("cancellation_reason") or "не указана",
+        )
+        return
+
     if not user_id_str or not payment_db_id_str:
         logging.warning(
             f"Missing metadata in cancelled payment webhook: {payment_info_from_webhook.get('id')}"
@@ -485,6 +523,8 @@ async def yookassa_webhook_route(request: web.Request):
             str(payment_data_from_notification.description)
             if payment_data_from_notification.description else None,
             "payment_method": pm_dict,
+            "cancellation_reason": getattr(
+                getattr(payment_data_from_notification, 'cancellation_details', None), 'reason', None),
         }
 
         async with payment_processing_lock:
@@ -560,6 +600,11 @@ async def yookassa_webhook_route(request: web.Request):
                                                 set_default=True,
                                             )
                                             await session.commit()
+                                            await NotificationService(bot, settings, i18n_instance).notify_autopay_event(
+                                                user_id, "card_bound",
+                                                card=f"{display_network} •••• {display_last4}" if display_last4 else display_network,
+                                                reason="привязка в боте",
+                                            )
                                         except Exception:
                                             await session.rollback()
                                         # Notify user about successful binding with Back button
