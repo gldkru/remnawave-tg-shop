@@ -21,7 +21,7 @@ from bot.services.panel_api_service import PanelApiService
 from bot.services.notification_service import NotificationService
 from bot.middlewares.i18n import JsonI18n
 from bot.utils.date_utils import format_long_date
-from db.dal import subscription_dal
+from db.dal import subscription_dal, user_billing_dal
 from db.models import Subscription
 
 DEVICES_PAGE_SIZE = 5
@@ -193,8 +193,12 @@ async def my_subscription_command_handler(
             )
         ])
 
-        # 2) Auto-renew toggle (if supported and not tribute)
-        if local_sub and local_sub.provider != "tribute" and getattr(settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False):
+        # 2) Auto-renew toggle: only when there is a saved card to charge. auto_renew_enabled
+        # defaults to on for every paid subscription, and showing "Disable auto-renewal" to a
+        # customer with no card suggests a charge that can never happen.
+        if (local_sub and local_sub.provider != "tribute"
+                and getattr(settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False)
+                and await user_billing_dal.get_user_default_payment_method(session, event.from_user.id)):
             toggle_text = (
                 get_text("autorenew_disable_button") if local_sub.auto_renew_enabled else get_text("autorenew_enable_button")
             )
