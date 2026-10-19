@@ -10,6 +10,7 @@ from bot.keyboards.inline.user_keyboards import (
     get_bind_url_keyboard,
 )
 from bot.services.yookassa_service import YooKassaService
+from bot.services.notification_service import NotificationService
 from bot.middlewares.i18n import JsonI18n
 from db.dal import user_billing_dal
 from db.models import Payment
@@ -88,7 +89,7 @@ async def payment_method_bind(callback: types.CallbackQuery, settings: Settings,
     resp = await yookassa_service.create_payment(
         amount=1.00,
         currency="RUB",
-        description="Bind card",
+        description=_("payment_description_bind_card"),
         metadata=metadata,
         receipt_email=settings.YOOKASSA_DEFAULT_RECEIPT_EMAIL,
         save_payment_method=True,
@@ -152,6 +153,12 @@ async def payment_method_delete(callback: types.CallbackQuery, settings: Setting
             delete_user_payment_method_by_provider_id,
             list_user_payment_methods,
         )
+        methods_before = await list_user_payment_methods(session, callback.from_user.id)
+        removed = next(
+            (m for m in methods_before
+             if (pm_id_raw.isdigit() and m.method_id == int(pm_id_raw)) or m.provider_payment_method_id == pm_id_raw),
+            None,
+        )
         if pm_id_raw:
             if pm_id_raw.isdigit():
                 deleted = await delete_user_payment_method(session, callback.from_user.id, int(pm_id_raw))
@@ -163,6 +170,13 @@ async def payment_method_delete(callback: types.CallbackQuery, settings: Setting
         except Exception:
             pass
         await session.commit()
+        if deleted:
+            card_display = None
+            if removed:
+                card_display = (f"{removed.card_network} •••• {removed.card_last4}"
+                                if removed.card_last4 else removed.card_network)
+            await NotificationService(callback.bot, settings, i18n).notify_autopay_event(
+                callback.from_user.id, "card_removed", card=card_display)
 
         methods = await list_user_payment_methods(session, callback.from_user.id)
         text = _("payment_methods_title")

@@ -47,6 +47,7 @@
   "device_disconnect_failed": "Could not disconnect the device. Please try again later.",
   "cancel_button": "❌ Cancel",
   "payment_description_subscription": "Subscription payment for {months} mo.",
+  "payment_description_bind_card": "Card binding",
   "payment_link_message": "To pay for {months} mo. subscription, click the button below:",
   "payment_link_message_autopay": "To pay for a {months} mo. subscription, click the button below.\n\n🔄 <b>Auto-renewal.</b> Your payment method will be saved in YooKassa: about a day before the subscription ends we charge {price} RUB for the next {months} mo. at the current price, and the bot warns you two days ahead. You can turn auto-renewal off and remove the card at any time: \"My subscription\" → \"Disable auto-renewal\" or \"Payment Methods\".\n\nBy clicking \"Pay\" you accept the auto-payment terms: {terms_url}",
   "payment_successful_error_details": "✅ Payment succeeded, but an error occurred displaying details. Your subscription is active. Contact support if anything is wrong.",

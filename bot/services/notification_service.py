@@ -339,6 +339,48 @@ class NotificationService:
         await self._send_to_chat("\n".join(lines), chat_id,
                                  self.settings.audit_log_thread_id)
 
+    AUTOPAY_EVENTS = {
+        "card_bound": "💳 карта привязана",
+        "card_removed": "🗑 карта удалена",
+        "renew_on": "🔄 автопродление включено",
+        "renew_off": "🛑 автопродление отключено",
+        "charge_started": "⏳ автосписание запущено",
+        "charge_skipped": "⚠️ автосписание не запущено",
+        "charge_declined": "❌ автосписание отклонено",
+    }
+
+    async def notify_autopay_event(self,
+                                   user_id: int,
+                                   event: str,
+                                   card: Optional[str] = None,
+                                   amount: Optional[float] = None,
+                                   months: Optional[int] = None,
+                                   reason: Optional[str] = None):
+        """One line per autopay event (cards, auto-renew toggles, charges) in the log chat.
+
+        A successful auto-renew charge is not reported here: it already arrives as a
+        regular payment. Never raises, so it cannot break the action it records.
+        """
+        try:
+            if not self.settings.LOG_PAYMENTS:
+                return
+            lines = [
+                f"<b>Автоплатежи: {self.AUTOPAY_EVENTS.get(event, hd.quote(event))}</b>",
+                "",
+                f"🆔 ID: <code>{user_id}</code>",
+            ]
+            if card:
+                lines.append(f"💳 Карта: {hd.quote(card)}")
+            if amount is not None:
+                period = f" за {months} мес." if months else ""
+                lines.append(f"💰 Сумма: <b>{amount:g} RUB</b>{period}")
+            if reason:
+                lines.append(f"📄 Детали: {hd.quote(reason)}")
+            lines.append(f"🕐 {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            await self._send_to_log_channel("\n".join(lines))
+        except Exception:
+            logging.exception(f"Failed to log autopay event '{event}' for user {user_id}")
+
     async def send_custom_notification(self, message: str, to_admins: bool = False, 
                                      to_log_channel: bool = True, thread_id: Optional[int] = None):
         """Send custom notification message"""
