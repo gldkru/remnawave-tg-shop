@@ -19,6 +19,20 @@ def format_long_date(dt: datetime, lang: Optional[str]) -> str:
     return f"{_EN_MONTHS[dt.month - 1]} {dt.day}, {dt.year}"
 
 
+def format_days(days: int, lang: Optional[str]) -> str:
+    """Day count with the right plural: '1 день', '3 дня', '10 дней' (ru), '1 day', '5 days' (other)."""
+    if (lang or "").lower().startswith("ru"):
+        n = abs(days)
+        if n % 10 == 1 and n % 100 != 11:
+            word = "день"
+        elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+            word = "дня"
+        else:
+            word = "дней"
+        return f"{days} {word}"
+    return f"{days} day" if abs(days) == 1 else f"{days} days"
+
+
 def add_months(base_dt: datetime, months_to_add: int) -> datetime:
     """Add calendar months to a datetime, clamping the day to the month's length.
 

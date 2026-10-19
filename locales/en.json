@@ -63,6 +63,7 @@
   "promo_code_applied_success_full": "✅ Promo code applied successfully!\nSubscription active until {end_date}.\n\nConnection key:\n<code>{config_link}</code>\n\nTo connect, open the link and follow the instructions 👇",
   "error_applying_promo_bonus": "Failed to apply promo bonus. Please try again later or contact support.",
   "promo_input_cancelled_short": "Promo code entry cancelled.",
+  "gift_winback_message": "Hi! A lot has changed at VPNoX lately: new servers and countries, updated protocols, and above all stable service without interruptions.\n\nSee for yourself: we are giving you <b>{days}</b> of subscription, already active until <b>{end_date}</b>. If the app is still installed, just connect. If not, the connect button is below.",
   "trial_feature_disabled": "Free trial is currently unavailable.",
   "trial_already_had_subscription_or_trial": "You have already used a free trial or had a paid subscription. Free trial is available only once for new users.",
   "trial_confirm_activate_button": "✅ Activate!",

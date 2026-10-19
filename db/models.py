@@ -259,3 +259,55 @@ class AdAttribution(Base):
 
     user = relationship("User")
     campaign = relationship("AdCampaign", back_populates="attributions")
+
+
+class GiftCampaign(Base):
+    """A batch of free days handed out to chosen users (win-back, apology, test drive)."""
+    __tablename__ = "gift_campaigns"
+
+    gift_campaign_id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String, nullable=False, unique=True, index=True)
+    title = Column(String, nullable=False)
+    message_key = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # State for the unattended daily run (`run --next` from a timer).
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    halted_reason = Column(String, nullable=True)
+    halted_at = Column(DateTime(timezone=True), nullable=True)
+    final_reported_at = Column(DateTime(timezone=True), nullable=True)
+
+    grants = relationship("GiftGrant", back_populates="campaign", cascade="all, delete-orphan")
+
+
+class GiftGrant(Base):
+    """One recipient of a gift campaign: the plan row, then what was actually done.
+
+    The row exists from planning on; granted_at stays NULL until the days are given, and
+    skip_reason is set instead when the user stopped qualifying before their group ran.
+    """
+    __tablename__ = "gift_grants"
+
+    gift_grant_id = Column(Integer, primary_key=True, autoincrement=True)
+    gift_campaign_id = Column(Integer, ForeignKey("gift_campaigns.gift_campaign_id"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.user_id"), nullable=False, index=True)
+    segment = Column(String, nullable=False)
+    group_no = Column(Integer, nullable=False, index=True)
+    bonus_days = Column(Integer, nullable=False)
+    comment = Column(String, nullable=False)
+
+    granted_at = Column(DateTime(timezone=True), nullable=True)
+    end_date_before = Column(DateTime(timezone=True), nullable=True)
+    end_date_after = Column(DateTime(timezone=True), nullable=True)
+    skip_reason = Column(String, nullable=True)
+
+    # Panel traffic counters right before the grant: the baseline for "did they connect".
+    baseline_online_at = Column(DateTime(timezone=True), nullable=True)
+    baseline_lifetime_traffic_bytes = Column(BigInteger, nullable=True)
+
+    message_status = Column(String, nullable=True)
+    message_sent_at = Column(DateTime(timezone=True), nullable=True)
+
+    campaign = relationship("GiftCampaign", back_populates="grants")
+    user = relationship("User")
+
+    __table_args__ = (UniqueConstraint("gift_campaign_id", "user_id", name="uq_gift_grant_campaign_user"),)
