@@ -170,6 +170,22 @@ class PanelWebhookService:
             await session.rollback()
             return False
 
+    async def _autopay_armed_subscription(self, session, user_id: int):
+        """The active subscription if it will really be charged: auto-renew on, not Tribute,
+        autopay enabled, and a saved card on file. Auto-renew defaults to on for every paid
+        subscription, so without the card check customers who never saved one would be told
+        a charge is coming and audited as failed charges."""
+        if not getattr(self.settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False):
+            return None
+        from db.dal import subscription_dal
+        from db.dal.user_billing_dal import get_user_default_payment_method
+        sub = await subscription_dal.get_active_subscription_by_user_id(session, user_id)
+        if not sub or not sub.auto_renew_enabled or sub.provider == 'tribute':
+            return None
+        if not await get_user_default_payment_method(session, user_id):
+            return None
+        return sub
+
     async def handle_event(self, event_name: str, user_payload: dict, meta: Optional[dict] = None):
         telegram_id = user_payload.get("telegramId")
         if not telegram_id:
@@ -197,9 +213,8 @@ class PanelWebhookService:
                     subscription_service = getattr(self, "subscription_service", None)
                     if subscription_service:
                         async with self.async_session_factory() as session:
-                            from db.dal import subscription_dal
-                            sub = await subscription_dal.get_active_subscription_by_user_id(session, user_id)
-                            if sub and sub.auto_renew_enabled and sub.provider != 'tribute':
+                            sub = await self._autopay_armed_subscription(session, user_id)
+                            if sub:
                                 try:
                                     ok = await subscription_service.charge_subscription_renewal(session, sub)
                                     # If initiation succeeded, suppress the 24h reminder by returning early
@@ -214,28 +229,21 @@ class PanelWebhookService:
                 except Exception:
                     logging.exception("Auto-renew trigger (24h) failed pre-check")
             if days_left <= self.settings.SUBSCRIPTION_NOTIFY_DAYS_BEFORE:
-                # For 48h event, if auto-renew is enabled and not tribute, show special notice with cancel button
+                # 48h before expiry: users whose card will be charged get the "charge tomorrow"
+                # notice with a cancel button; everyone else gets the plain reminder.
                 if days_left == 2:
                     async with self.async_session_factory() as session:
-                        from db.dal import subscription_dal
-                        sub = await subscription_dal.get_active_subscription_by_user_id(session, user_id)
-                        logging.info(
-                            "48h webhook check: user_id=%s sub_found=%s auto_renew=%s provider=%s",
+                        sub = await self._autopay_armed_subscription(session, user_id)
+                    if sub:
+                        cancel_kb = get_autorenew_cancel_keyboard(lang, self.i18n)
+                        await self._send_message(
                             user_id,
-                            bool(sub),
-                            getattr(sub, 'auto_renew_enabled', None) if sub else None,
-                            getattr(sub, 'provider', None) if sub else None,
+                            lang,
+                            "autorenew_48h_charge_tomorrow_notice",
+                            reply_markup=cancel_kb,
+                            user_name=first_name,
                         )
-                        if sub and sub.auto_renew_enabled and sub.provider != 'tribute':
-                            cancel_kb = get_autorenew_cancel_keyboard(lang, self.i18n)
-                            await self._send_message(
-                                user_id,
-                                lang,
-                                "autorenew_48h_charge_tomorrow_notice",
-                                reply_markup=cancel_kb,
-                                user_name=first_name,
-                            )
-                            return
+                        return
                 await self._send_message(
                     user_id,
                     lang,
