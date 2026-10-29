@@ -10,7 +10,7 @@ from bot.utils.date_utils import add_months
 from db.models import User, Subscription
 
 from config.settings import Settings
-from .panel_api_service import PanelApiService
+from .panel_api_service import PanelApiService, PanelUnavailableError
 from .analytics import track
 
 
@@ -107,9 +107,17 @@ class SubscriptionService:
                 logging.info(
                     f"User {user_id} (local panel_id: {current_local_panel_id}) not found on panel by TG ID. Fetching by panel_id."
                 )
-                panel_user_obj_from_api = await self.panel_service.get_user_by_panel_id(
-                    current_local_panel_id
-                )
+                try:
+                    panel_user_obj_from_api = await self.panel_service.fetch_user_by_panel_id(
+                        current_local_panel_id
+                    )
+                except PanelUnavailableError as e_unavailable:
+                    # Creating a replacement now would relink the user to an empty account.
+                    logging.error(
+                        f"Panel did not answer for panel user {current_local_panel_id} of TG user {user_id} "
+                        f"({e_unavailable}); keeping the local link and giving up for now."
+                    )
+                    return None, None, None, False
                 if not panel_user_obj_from_api:
                     logging.warning(
                         f"Local panel_id {current_local_panel_id} for TG user {user_id} also not found on panel. User might be deleted from panel or UUID desynced."
@@ -669,7 +677,15 @@ class SubscriptionService:
         local_active_sub = await subscription_dal.get_active_subscription_by_user_id(
             session, user_id, panel_user_id
         )
-        panel_user_data = await self.panel_service.get_user_by_panel_id(panel_user_id)
+        try:
+            panel_user_data = await self.panel_service.fetch_user_by_panel_id(panel_user_id)
+        except PanelUnavailableError as e_unavailable:
+            # Unavailable is not "deleted": the link must survive a slow or failing panel.
+            logging.warning(
+                f"Panel did not answer for panel user {panel_user_id} of user {user_id} "
+                f"({e_unavailable}); keeping the local link."
+            )
+            return None
 
         if not panel_user_data:
             logging.warning(

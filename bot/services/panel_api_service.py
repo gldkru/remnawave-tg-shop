@@ -14,6 +14,10 @@ from db.dal import panel_sync_dal
 from db.models import PanelSyncStatus
 
 
+class PanelUnavailableError(Exception):
+    """The panel did not give an answer: timeout, transport error or an error response."""
+
+
 class PanelApiService:
 
     TELEGRAM_ID_FILTER_PAGE_SIZE = 100
@@ -256,10 +260,15 @@ class PanelApiService:
         logging.info(f"Fetched {len(all_users)} users from panel API.")
         return all_users
 
-    async def get_user_by_panel_id(
+    async def fetch_user_by_panel_id(
             self,
             panel_user_id: int,
             log_response: bool = True) -> Optional[Dict[str, Any]]:
+        """The panel user, or None only when the panel answered 404.
+
+        Raises PanelUnavailableError for anything else, so callers never mistake a slow
+        or failing panel for a deleted user.
+        """
         endpoint = f"/users/{panel_user_id}"
         full_response = await self._request("GET",
                                             endpoint,
@@ -268,8 +277,20 @@ class PanelApiService:
         if full_response and not full_response.get(
                 "error") and "response" in full_response:
             return full_response.get("response")
+        if full_response and full_response.get("status_code") == 404:
+            return None
+        raise PanelUnavailableError(
+            f"panel user {panel_user_id}: status {(full_response or {}).get('status_code')}")
 
-        return None
+    async def get_user_by_panel_id(
+            self,
+            panel_user_id: int,
+            log_response: bool = True) -> Optional[Dict[str, Any]]:
+        """The panel user, or None when it is missing or the panel did not answer."""
+        try:
+            return await self.fetch_user_by_panel_id(panel_user_id, log_response)
+        except PanelUnavailableError:
+            return None
 
     async def get_user(
         self,
