@@ -14,6 +14,7 @@ from .notification_service import NotificationService
 from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
 from bot.utils.text_sanitizer import sanitize_display_name, username_for_display
 from bot.utils.metrics import external_call
+from bot.services.analytics import track
 
 
 class StarsService:
@@ -107,6 +108,8 @@ class StarsService:
             skip_if_active_before_payment=False,
         )
         await session.commit()
+        track(message.from_user.id, "payment_succeeded", provider="stars", months=months,
+              amount=stars_amount)
 
         applied_days = referral_bonus.get("referee_bonus_applied_days") if referral_bonus else None
         final_end = referral_bonus.get("referee_new_end_date") if referral_bonus else None

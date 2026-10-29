@@ -11,6 +11,7 @@ from db.models import User, Subscription
 
 from config.settings import Settings
 from .panel_api_service import PanelApiService
+from .analytics import track
 
 
 class SubscriptionService:
@@ -844,11 +845,15 @@ class SubscriptionService:
         )
         if not resp or resp.get("status") not in {"pending", "waiting_for_capture", "succeeded"}:
             logging.error(f"Auto-renew create_payment failed: {resp}")
+            track(sub.user_id, "payment_failed", provider="yookassa", reason="gateway_error",
+                  auto_renew=True)
             await audit.notify_autopay_event(
                 sub.user_id, "charge_skipped", card=card_display, amount=amount, months=months,
                 reason=f"ЮKassa отклонила запрос: {(resp or {}).get('message') or (resp or {}).get('status') or 'нет ответа'}")
             return False
         logging.info(f"Auto-renew initiated for user {sub.user_id} payment_id={resp.get('id')}")
+        track(sub.user_id, "payment_started", provider="yookassa", months=months,
+              amount=float(amount), auto_renew=True)
         await audit.notify_autopay_event(sub.user_id, "charge_started", card=card_display,
                                          amount=amount, months=months)
         return True

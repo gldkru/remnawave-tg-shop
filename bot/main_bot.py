@@ -35,6 +35,7 @@ from bot.services.promo_code_service import PromoCodeService
 from bot.services.stars_service import StarsService
 from bot.services.tribute_service import TributeService, tribute_webhook_route
 from bot.services.crypto_pay_service import CryptoPayService, cryptopay_webhook_route
+from bot.services import analytics
 
 from bot.handlers.user import payment as user_payment_webhook_module
 from bot.handlers.admin.sync_admin import perform_sync
@@ -218,6 +219,8 @@ async def on_shutdown_configured(dispatcher: Dispatcher):
         except Exception as e:
             logging.warning(f"SHUTDOWN: Failed to close bot session: {e}")
 
+    await analytics.flush()
+
     from db.database_setup import async_engine as global_async_engine
 
     if global_async_engine:
@@ -260,6 +263,7 @@ async def run_bot(settings_param: Settings):
         dp[key] = service
     dp["panel_service"] = services["panel_service"]
     dp["async_session_factory"] = local_async_session_factory
+    analytics.configure(local_async_session_factory)
 
     # Wrap startup/shutdown handlers to satisfy aiogram event signature (no args passed)
     async def _on_startup_wrapper():

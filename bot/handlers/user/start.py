@@ -18,8 +18,14 @@ from bot.services.promo_code_service import PromoCodeService
 from config.settings import Settings
 from bot.middlewares.i18n import JsonI18n
 from bot.utils.text_sanitizer import sanitize_username, sanitize_display_name
+from bot.services.analytics import track
 
 router = Router(name="user_start_router")
+
+# main_action values that open a screen; "language" is tracked in its own handler.
+SECTION_ACTIONS = frozenset({
+    "subscribe", "my_subscription", "my_devices", "referral", "apply_promo", "back_to_main",
+})
 
 
 async def send_main_menu(target_event: Union[types.Message,
@@ -141,6 +147,8 @@ async def start_command_handler(message: types.Message,
     referred_by_user_id: Optional[int] = None
     promo_code_to_apply: Optional[str] = None
     ad_start_param: Optional[str] = None
+    is_new_user = False
+    ad_campaign_id: Optional[int] = None
 
     if ref_match:
         potential_referrer_id = int(ref_match.group(1))
@@ -172,6 +180,7 @@ async def start_command_handler(message: types.Message,
             db_user, created = await user_dal.create_user(session, user_data_to_create)
 
             if created:
+                is_new_user = True
                 logging.info(
                     f"New user {user_id} added to session. Referred by: {referred_by_user_id or 'N/A'}."
                 )
@@ -236,12 +245,20 @@ async def start_command_handler(message: types.Message,
             if campaign and campaign.is_active:
                 await _ad_dal.ensure_attribution(session, user_id=user_id, campaign_id=campaign.ad_campaign_id)
                 await session.commit()
+                ad_campaign_id = campaign.ad_campaign_id
         except Exception as e_attr:
             logging.error(f"Failed to attribute user {user_id} to ad '{ad_start_param}': {e_attr}")
             try:
                 await session.rollback()
             except Exception:
                 pass
+
+    start_source = ("ref" if ref_match else "promo" if promo_match
+                    else "ad" if ad_param_match else "organic")
+    start_props = {"source": start_source, "new_user": is_new_user}
+    if ad_campaign_id is not None:
+        start_props["campaign_id"] = ad_campaign_id
+    track(user_id, "start", **start_props)
 
     # Send welcome message if not disabled
     if not settings.DISABLE_WELCOME_MESSAGE:
@@ -311,6 +328,8 @@ async def language_command_handler(
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs
                                            ) if i18n else key
+    if isinstance(event, types.CallbackQuery):
+        track(event.from_user.id, "section_viewed", section="language")
 
     text_to_send = _(key="choose_language")
     reply_markup = get_language_selection_keyboard(i18n, current_lang)
@@ -399,6 +418,9 @@ async def main_action_callback_handler(
     if not callback.message:
         await callback.answer("Error: message context lost.", show_alert=True)
         return
+
+    if action in SECTION_ACTIONS:
+        track(user_id, "section_viewed", section=action)
 
     if action == "subscribe":
         await user_subscription_handlers.display_subscription_options(

@@ -4,7 +4,7 @@ from typing import Set
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
-from .models import Base
+from .models import AnalyticsEvent, Base
 
 
 def _add_missing_columns(connection: Connection) -> None:
@@ -129,6 +129,18 @@ def _backfill_user_payment_methods_from_billing(connection: Connection) -> None:
         )
 
 
+def _ensure_analytics_events_table(connection: Connection) -> None:
+    """
+    analytics_events with its name index. create_all normally gets there first; this keeps
+    the table guaranteed by the migrator, which is what deployments rely on, and is a no-op
+    once it exists.
+    """
+    if "analytics_events" in set(inspect(connection).get_table_names()):
+        return
+    logging.info("Migrator: creating analytics_events")
+    AnalyticsEvent.__table__.create(connection)
+
+
 def run_simple_migrations(connection: Connection) -> None:
     """
     Run lightweight, idempotent migrations:
@@ -140,6 +152,7 @@ def run_simple_migrations(connection: Connection) -> None:
         _relax_legacy_panel_uuid_columns(connection)
         _backfill_subscription_panel_user_id(connection)
         _backfill_user_payment_methods_from_billing(connection)
+        _ensure_analytics_events_table(connection)
         logging.info("Migrator: schema synchronized (columns added as needed).")
     except Exception as e:
         logging.error(f"Migrator: failed to run simple migrations: {e}", exc_info=True)

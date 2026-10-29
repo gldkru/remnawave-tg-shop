@@ -9,6 +9,7 @@ from bot.services.yookassa_service import YooKassaService
 from bot.services.crypto_pay_service import CryptoPayService
 from bot.services.stars_service import StarsService
 from bot.middlewares.i18n import JsonI18n
+from bot.services.analytics import track
 from db.dal import payment_dal, user_billing_dal
 
 router = Router(name="user_subscription_payments_router")
@@ -48,6 +49,7 @@ async def select_subscription_period_callback_handler(callback: types.CallbackQu
             pass
         return
 
+    track(callback.from_user.id, "subscribe_period_selected", months=months)
     currency_symbol_val = settings.DEFAULT_CURRENCY_SYMBOL
     text_content = get_text("choose_payment_method")
     tribute_url = settings.tribute_payment_links.get(months)
@@ -113,6 +115,7 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
         return
 
     user_id = callback.from_user.id
+    track(user_id, "payment_started", provider="yookassa", months=months, amount=price_rub)
     payment_description = get_text("payment_description_subscription", months=months)
     currency_code_for_yk = "RUB"
 
@@ -264,6 +267,7 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
         logging.error(
             f"Failed to create payment in YooKassa for user {user_id}, payment_db_id {db_payment_record.payment_id}. Response: {payment_response_yk}"
         )
+        track(user_id, "payment_failed", provider="yookassa", reason="gateway_error")
         await callback.message.edit_text(get_text("error_payment_gateway"))
 
     try:
@@ -311,6 +315,7 @@ async def pay_crypto_callback_handler(
         return
 
     user_id = callback.from_user.id
+    track(user_id, "payment_started", provider="cryptopay", months=months, amount=price_amount)
     payment_description = get_text("payment_description_subscription", months=months)
 
     invoice_url = await cryptopay_service.create_invoice(
@@ -343,6 +348,7 @@ async def pay_crypto_callback_handler(
             pass
         return
 
+    track(user_id, "payment_failed", provider="cryptopay", reason="gateway_error")
     try:
         await callback.answer(get_text("error_payment_gateway"), show_alert=True)
     except Exception:
@@ -388,6 +394,7 @@ async def pay_stars_callback_handler(
         return
 
     user_id = callback.from_user.id
+    track(user_id, "payment_started", provider="stars", months=months, amount=stars_price)
     payment_description = get_text("payment_description_subscription", months=months)
 
     payment_db_id = await stars_service.create_invoice(
@@ -405,6 +412,7 @@ async def pay_stars_callback_handler(
             pass
         return
 
+    track(user_id, "payment_failed", provider="stars", reason="gateway_error")
     try:
         await callback.answer(get_text("error_payment_gateway"), show_alert=True)
     except Exception:

@@ -14,6 +14,7 @@ from bot.services.subscription_service import SubscriptionService
 from bot.services.panel_api_service import PanelApiService
 from bot.services.referral_service import ReferralService
 from .notification_service import NotificationService
+from .analytics import track
 from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
 from db.dal import payment_dal, user_dal, subscription_dal
 from bot.utils.text_sanitizer import sanitize_display_name, username_for_display
@@ -165,6 +166,8 @@ class TributeService:
                     skip_if_active_before_payment=False,
                 )
                 await session.commit()
+                track(int(user_id), "payment_succeeded", provider="tribute", months=months,
+                      amount=amount_float)
 
                 db_user = await user_dal.get_user_by_id(session, int(user_id))
                 lang = db_user.language_code if db_user and db_user.language_code else settings.DEFAULT_LANGUAGE

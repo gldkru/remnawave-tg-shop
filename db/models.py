@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Float, ForeignKey, UniqueConstraint, Text, BigInteger
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, DeclarativeBase
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.sql import func
@@ -259,6 +260,18 @@ class AdAttribution(Base):
 
     user = relationship("User")
     campaign = relationship("AdCampaign", back_populates="attributions")
+
+
+class AnalyticsEvent(Base):
+    """One product event from bot.services.analytics.track; names are a fixed vocabulary."""
+    __tablename__ = "analytics_events"
+
+    event_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=True)
+    ts = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    name = Column(String(64), nullable=False, index=True)
+    props = Column(JSONB, nullable=True)
+    session_id = Column(String(32), nullable=True)
 
 
 class GiftCampaign(Base):

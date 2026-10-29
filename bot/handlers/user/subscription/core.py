@@ -20,6 +20,7 @@ from bot.services.subscription_service import SubscriptionService
 from bot.services.panel_api_service import PanelApiService
 from bot.services.notification_service import NotificationService
 from bot.middlewares.i18n import JsonI18n
+from bot.services.analytics import track
 from bot.utils.date_utils import format_long_date
 from db.dal import subscription_dal, user_billing_dal
 from db.models import Subscription
@@ -509,6 +510,7 @@ async def confirm_autorenew_handler(
 
     await subscription_dal.update_subscription(session, sub.subscription_id, {"auto_renew_enabled": enable})
     await session.commit()
+    track(callback.from_user.id, "autorenew_toggled", enabled=enable, source="my_subscription")
     await NotificationService(bot, settings, i18n).notify_autopay_event(
         callback.from_user.id, "renew_on" if enable else "renew_off",
         reason="кнопка в «Моя подписка»")
@@ -550,6 +552,7 @@ async def autorenew_cancel_from_webhook_button(
         return
     await subscription_dal.update_subscription(session, sub.subscription_id, {"auto_renew_enabled": False})
     await session.commit()
+    track(callback.from_user.id, "autorenew_toggled", enabled=False, source="charge_notice")
     await NotificationService(bot, settings, i18n).notify_autopay_event(
         callback.from_user.id, "renew_off", reason="кнопка в предупреждении о списании")
     try:

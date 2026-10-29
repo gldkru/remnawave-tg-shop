@@ -18,6 +18,7 @@ from bot.services.notification_service import NotificationService
 from db.dal import payment_dal, user_dal
 from bot.utils.text_sanitizer import sanitize_display_name, username_for_display
 from bot.utils.metrics import external_call
+from bot.services.analytics import track
 
 
 class CryptoPayService:
@@ -176,6 +177,8 @@ class CryptoPayService:
                 await session.rollback()
                 logging.error(f"Failed to process CryptoPay invoice: {e}", exc_info=True)
                 return
+            track(user_id, "payment_succeeded", provider="cryptopay", months=months,
+                  amount=float(invoice.amount))
 
             db_user = await user_dal.get_user_by_id(session, user_id)
             # Use DB language for user-facing messages
