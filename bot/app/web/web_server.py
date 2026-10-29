@@ -42,9 +42,7 @@ async def build_and_start_web_app(
     if telegram_uses_webhook_mode:
         telegram_webhook_path = f"/{settings.BOT_TOKEN}"
         app.router.add_post(telegram_webhook_path, SimpleRequestHandler(dispatcher=dp, bot=bot))
-        logging.info(
-            f"Telegram webhook route configured at: [POST] {telegram_webhook_path} (relative to base URL)"
-        )
+        logging.info("Telegram webhook route configured at: [POST] /<bot-token>")
 
     from bot.handlers.user.payment import yookassa_webhook_route
     from bot.services.tribute_service import tribute_webhook_route

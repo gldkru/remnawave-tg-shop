@@ -39,6 +39,7 @@ from bot.services import analytics
 
 from bot.handlers.user import payment as user_payment_webhook_module
 from bot.handlers.admin.sync_admin import perform_sync
+from bot.utils.log_redaction import redact_secrets
 from bot.utils.message_queue import init_queue_manager
 from bot.utils.metrics import start_metrics_server
 
@@ -64,16 +65,18 @@ async def on_startup_configured(dispatcher: Dispatcher):
         full_telegram_webhook_url = (
             f"{str(telegram_webhook_url_to_set).rstrip('/')}/{settings.BOT_TOKEN}"
         )
+        webhook_url_for_log = redact_secrets(full_telegram_webhook_url)
 
         logging.info(
-            f"STARTUP: Attempting to set Telegram webhook to: {full_telegram_webhook_url if full_telegram_webhook_url != 'ERROR_URL_TOKEN_DETECTED' else 'HIDDEN DUE TO TOKEN'}"
+            f"STARTUP: Attempting to set Telegram webhook to: {webhook_url_for_log}"
         )
 
         if full_telegram_webhook_url != "ERROR_URL_TOKEN_DETECTED":
             try:
                 current_webhook_info = await bot.get_webhook_info()
                 logging.info(
-                    f"STARTUP: Current Telegram webhook info BEFORE setting: {current_webhook_info.model_dump_json(exclude_none=True, indent=2)}"
+                    "STARTUP: Current Telegram webhook info BEFORE setting: "
+                    + redact_secrets(current_webhook_info.model_dump_json(exclude_none=True, indent=2))
                 )
 
                 set_success = await bot.set_webhook(
@@ -83,16 +86,17 @@ async def on_startup_configured(dispatcher: Dispatcher):
                 )
                 if set_success:
                     logging.info(
-                        f"STARTUP: bot.set_webhook to {full_telegram_webhook_url} returned SUCCESS (True)."
+                        f"STARTUP: bot.set_webhook to {webhook_url_for_log} returned SUCCESS (True)."
                     )
                 else:
                     logging.error(
-                        f"STARTUP: bot.set_webhook to {full_telegram_webhook_url} returned FAILURE (False)."
+                        f"STARTUP: bot.set_webhook to {webhook_url_for_log} returned FAILURE (False)."
                     )
 
                 new_webhook_info = await bot.get_webhook_info()
                 logging.info(
-                    f"STARTUP: Telegram Webhook info AFTER setting: {new_webhook_info.model_dump_json(exclude_none=True, indent=2)}"
+                    "STARTUP: Telegram Webhook info AFTER setting: "
+                    + redact_secrets(new_webhook_info.model_dump_json(exclude_none=True, indent=2))
                 )
                 if not new_webhook_info.url:
                     logging.error(
