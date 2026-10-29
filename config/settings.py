@@ -108,6 +108,10 @@ class Settings(BaseSettings):
 
     PANEL_API_URL: Optional[str] = None
     PANEL_API_KEY: Optional[str] = None
+    PANEL_API_TIMEOUT_SECONDS: float = Field(
+        default=10.0, description="Upper bound for one panel API request")
+    PAYMENT_API_TIMEOUT_SECONDS: float = Field(
+        default=15.0, description="Upper bound for one YooKassa, CryptoPay or Stars invoice request")
     USER_TRAFFIC_LIMIT_GB: Optional[float] = Field(default=0.0)
     USER_TRAFFIC_STRATEGY: str = Field(default="NO_RESET")
     USER_SQUAD_UUIDS: Optional[str] = Field(

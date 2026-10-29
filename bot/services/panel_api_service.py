@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import Settings
+from bot.utils.metrics import external_call
 from db.dal import panel_sync_dal
 from db.models import PanelSyncStatus
 
@@ -63,8 +64,36 @@ class PanelApiService:
     async def _request(self,
                        method: str,
                        endpoint: str,
+                       *,
+                       op: str,
                        log_full_response: bool = False,
                        **kwargs) -> Optional[Dict[str, Any]]:
+        """Send a panel request within PANEL_API_TIMEOUT_SECONDS; `op` labels its metrics.
+
+        A 404 is an answer (user not found), not a failure of the panel.
+        """
+        try:
+            async with external_call("panel", op,
+                                     self.settings.PANEL_API_TIMEOUT_SECONDS) as call:
+                response = await self._send_request(method, endpoint,
+                                                    log_full_response, **kwargs)
+                if response and response.get("error") and response.get("status_code") != 404:
+                    call.fail()
+                return response
+        except TimeoutError:
+            logging.error(
+                f"Panel API {op} timed out after {self.settings.PANEL_API_TIMEOUT_SECONDS}s.")
+            return {
+                "error": True,
+                "status_code": -3,
+                "message": "Request timed out"
+            }
+
+    async def _send_request(self,
+                            method: str,
+                            endpoint: str,
+                            log_full_response: bool = False,
+                            **kwargs) -> Optional[Dict[str, Any]]:
         if not self.base_url:
             logging.error(
                 "Panel API URL (PANEL_API_URL) not configured in settings.")
@@ -209,6 +238,7 @@ class PanelApiService:
             response_data = await self._request(
                 "GET",
                 "/users",
+                op="list_users",
                 params=params,
                 log_full_response=log_responses)
 
@@ -233,6 +263,7 @@ class PanelApiService:
         endpoint = f"/users/{panel_user_id}"
         full_response = await self._request("GET",
                                             endpoint,
+                                            op="get_user",
                                             log_full_response=log_response)
         if full_response and not full_response.get(
                 "error") and "response" in full_response:
@@ -289,6 +320,7 @@ class PanelApiService:
             log_response: bool) -> Optional[List[Dict[str, Any]]]:
         response_data = await self._request("GET",
                                             f"/users/by-username/{username}",
+                                            op="get_user_by_username",
                                             log_full_response=log_response)
 
         if response_data and not response_data.get(
@@ -318,6 +350,7 @@ class PanelApiService:
         }
         response_data = await self._request("GET",
                                             "/users",
+                                            op="find_users_by_telegram_id",
                                             params=params,
                                             log_full_response=log_response)
 
@@ -393,6 +426,7 @@ class PanelApiService:
 
         response = await self._request("POST",
                                        "/users",
+                                       op="create_user",
                                        json=payload,
                                        log_full_response=log_response)
         if response and not response.get("error") and "response" in response:
@@ -417,6 +451,7 @@ class PanelApiService:
 
         full_response = await self._request("PATCH",
                                             "/users",
+                                            op="update_user",
                                             json=update_payload,
                                             log_full_response=log_response)
         if full_response and not full_response.get(
@@ -437,6 +472,7 @@ class PanelApiService:
         endpoint = f"/users/{panel_user_id}/actions/{action}"
         response_data = await self._request("POST",
                                             endpoint,
+                                            op=f"{action}_user",
                                             log_full_response=log_response)
 
         if response_data and not response_data.get(
@@ -478,6 +514,7 @@ class PanelApiService:
         endpoint = f"/hwid/devices/{panel_user_id}"
         response_data = await self._request("GET",
                                             endpoint,
+                                            op="get_devices",
                                             log_full_response=False)
         if response_data and not response_data.get("error") and isinstance(
                 response_data.get("response"), dict):
@@ -492,6 +529,7 @@ class PanelApiService:
         """Wipe every HWID device of one user. Returns how many are left, None on failure."""
         response_data = await self._request("POST",
                                             "/hwid/devices/delete-all",
+                                            op="delete_all_devices",
                                             json={"userId": int(panel_user_id)},
                                             log_full_response=False)
         if response_data and not response_data.get("error") and isinstance(
@@ -507,6 +545,7 @@ class PanelApiService:
         payload = {"userId": int(panel_user_id), "hwid": hwid}
         response_data = await self._request("POST",
                                             "/hwid/devices/delete",
+                                            op="delete_device",
                                             json=payload,
                                             log_full_response=False)
         if response_data and not response_data.get(
@@ -528,6 +567,7 @@ class PanelApiService:
         """
         response_data = await self._request("GET",
                                             "/subscription-settings",
+                                            op="get_subscription_settings",
                                             log_full_response=False)
         if response_data and not response_data.get("error") and isinstance(
                 response_data.get("response"), dict):
@@ -558,21 +598,24 @@ class PanelApiService:
     
     async def get_system_stats(self) -> Optional[Dict[str, Any]]:
         """Get system statistics (CPU, memory, users counts)"""
-        response_data = await self._request("GET", "/system/stats", log_full_response=False)
+        response_data = await self._request("GET", "/system/stats", op="system_stats",
+                                            log_full_response=False)
         if response_data and not response_data.get("error") and "response" in response_data:
             return response_data.get("response")
         return None
     
     async def get_bandwidth_stats(self) -> Optional[Dict[str, Any]]:
         """Get bandwidth statistics"""
-        response_data = await self._request("GET", "/system/stats/bandwidth", log_full_response=False)
+        response_data = await self._request("GET", "/system/stats/bandwidth",
+                                            op="bandwidth_stats", log_full_response=False)
         if response_data and not response_data.get("error") and "response" in response_data:
             return response_data.get("response")
         return None
     
     async def get_nodes_statistics(self) -> Optional[Dict[str, Any]]:
         """Get nodes statistics"""
-        response_data = await self._request("GET", "/system/stats/nodes", log_full_response=False)
+        response_data = await self._request("GET", "/system/stats/nodes", op="nodes_stats",
+                                            log_full_response=False)
         if response_data and not response_data.get("error") and "response" in response_data:
             return response_data.get("response")
         return None

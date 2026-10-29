@@ -17,6 +17,7 @@ from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
 from bot.services.notification_service import NotificationService
 from db.dal import payment_dal, user_dal
 from bot.utils.text_sanitizer import sanitize_display_name, username_for_display
+from bot.utils.metrics import external_call
 
 
 class CryptoPayService:
@@ -96,14 +97,16 @@ class CryptoPayService:
             "payment_db_id": str(payment_record.payment_id),
         })
         try:
-            invoice = await self.client.create_invoice(
-                amount=amount,
-                currency_type=self.settings.CRYPTOPAY_CURRENCY_TYPE,
-                fiat=self.settings.CRYPTOPAY_ASSET if self.settings.CRYPTOPAY_CURRENCY_TYPE == "fiat" else None,
-                asset=self.settings.CRYPTOPAY_ASSET if self.settings.CRYPTOPAY_CURRENCY_TYPE == "crypto" else None,
-                description=description,
-                payload=payload,
-            )
+            async with external_call("cryptopay", "create_invoice",
+                                     self.settings.PAYMENT_API_TIMEOUT_SECONDS):
+                invoice = await self.client.create_invoice(
+                    amount=amount,
+                    currency_type=self.settings.CRYPTOPAY_CURRENCY_TYPE,
+                    fiat=self.settings.CRYPTOPAY_ASSET if self.settings.CRYPTOPAY_CURRENCY_TYPE == "fiat" else None,
+                    asset=self.settings.CRYPTOPAY_ASSET if self.settings.CRYPTOPAY_CURRENCY_TYPE == "crypto" else None,
+                    description=description,
+                    payload=payload,
+                )
             try:
                 await payment_dal.update_provider_payment_and_status(
                     session,

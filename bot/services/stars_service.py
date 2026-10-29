@@ -13,6 +13,7 @@ from bot.middlewares.i18n import JsonI18n
 from .notification_service import NotificationService
 from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
 from bot.utils.text_sanitizer import sanitize_display_name, username_for_display
+from bot.utils.metrics import external_call
 
 
 class StarsService:
@@ -49,15 +50,17 @@ class StarsService:
         payload = f"{db_payment_record.payment_id}:{months}"
         prices = [LabeledPrice(label=description, amount=stars_price)]
         try:
-            await self.bot.send_invoice(
-                chat_id=user_id,
-                title=description,
-                description=description,
-                payload=payload,
-                provider_token="",
-                currency="XTR",
-                prices=prices,
-            )
+            async with external_call("stars", "send_invoice",
+                                     self.settings.PAYMENT_API_TIMEOUT_SECONDS):
+                await self.bot.send_invoice(
+                    chat_id=user_id,
+                    title=description,
+                    description=description,
+                    payload=payload,
+                    provider_token="",
+                    currency="XTR",
+                    prices=prices,
+                )
             return db_payment_record.payment_id
         except Exception as e_inv:
             logging.error(f"Failed to send Telegram Stars invoice: {e_inv}",
