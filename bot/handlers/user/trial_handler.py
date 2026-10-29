@@ -145,7 +145,7 @@ async def request_trial_confirmation_handler(
 
     reply_markup = (
         get_connect_and_main_keyboard(
-            current_lang, i18n, settings, config_link_for_trial
+            current_lang, i18n, settings, config_link_for_trial, user_id=user_id
         )
         if activation_result and activation_result.get("activated")
         else get_main_menu_inline_keyboard(
@@ -278,7 +278,7 @@ async def confirm_activate_trial_handler(
 
     reply_markup = (
         get_connect_and_main_keyboard(
-            current_lang, i18n, settings, config_link_for_trial
+            current_lang, i18n, settings, config_link_for_trial, user_id=user_id
         )
         if activation_result and activation_result.get("activated")
         else get_main_menu_inline_keyboard(

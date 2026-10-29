@@ -50,6 +50,7 @@ async def build_and_start_web_app(
     from bot.services.tribute_service import tribute_webhook_route
     from bot.services.crypto_pay_service import cryptopay_webhook_route
     from bot.services.panel_webhook_service import panel_webhook_route
+    from bot.app.web.connect_link import CONNECT_ROUTE, connect_link_route
 
     tribute_path = settings.tribute_webhook_path
     if tribute_path.startswith("/"):
@@ -71,6 +72,10 @@ async def build_and_start_web_app(
     if panel_path.startswith("/"):
         app.router.add_post(panel_path, panel_webhook_route)
         logging.info(f"Panel webhook route configured at: [POST] {panel_path}")
+
+    if settings.CONNECT_LINK_SECRET:
+        app.router.add_get(CONNECT_ROUTE, connect_link_route)
+        logging.info(f"Connect link route configured at: [GET] {CONNECT_ROUTE}")
 
     web_app_runner = web.AppRunner(app)
     await web_app_runner.setup()

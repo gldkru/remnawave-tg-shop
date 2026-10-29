@@ -294,7 +294,8 @@ async def start_command_handler(message: types.Message,
                 from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
                 await message.answer(
                     promo_success_text,
-                    reply_markup=get_connect_and_main_keyboard(current_lang, i18n, settings, config_link),
+                    reply_markup=get_connect_and_main_keyboard(current_lang, i18n, settings, config_link,
+                                                               user_id=user_id),
                     parse_mode="HTML"
                 )
                 

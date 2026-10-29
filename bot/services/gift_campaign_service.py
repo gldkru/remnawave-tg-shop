@@ -178,7 +178,8 @@ class GiftCampaignService:
         text = self.i18n.gettext(lang, message_key, days=format_days(days, lang),
                                  end_date=format_long_date(new_end, lang))
         # Same connect button as the subscription screen: the mini app when configured.
-        markup = get_connect_and_main_keyboard(lang, self.i18n, self.settings, config_link)
+        markup = get_connect_and_main_keyboard(lang, self.i18n, self.settings, config_link,
+                                               user_id=user.user_id)
         for attempt in range(2):
             try:
                 await self.bot.send_message(user.user_id, text, reply_markup=markup)

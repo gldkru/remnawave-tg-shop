@@ -132,6 +132,10 @@ class Settings(BaseSettings):
     LOGS_PAGE_SIZE: int = Field(default=10)
 
     SUBSCRIPTION_MINI_APP_URL: Optional[str] = Field(default=None)
+    CONNECT_LINK_SECRET: Optional[str] = Field(
+        default=None,
+        description="HMAC key for tracked /go/connect links on URL connect buttons; unset disables them")
+    CONNECT_LINK_TTL_DAYS: int = Field(default=30, description="How long a tracked connect link stays valid")
 
     START_COMMAND_DESCRIPTION: Optional[str] = Field(default=None)
     DISABLE_WELCOME_MESSAGE: bool = Field(default=False, description="Disable welcome message on /start command")

@@ -34,6 +34,7 @@
   "pay_with_tribute_button": "❤️ Tribute",
   "pay_with_stars_button": "🌟 Звезды Telegram",
   "connect_button": "🔗 Подключиться",
+  "connect_link_press_again": "Ссылка устарела. Откройте бота и снова нажмите «🔗 Подключиться».",
 
   "devices_button": "📱 Мои устройства",
   "devices_details": "📱 <b>Ваши устройства ({current_devices}/{max_devices})</b>\n\n{devices}\n\nЧтобы отключить устройство, нажмите кнопку с его номером.\n<blockquote><i>Отключенное устройство подключится заново при следующем запуске приложения — сначала удалите подписку в приложении.</i></blockquote>",

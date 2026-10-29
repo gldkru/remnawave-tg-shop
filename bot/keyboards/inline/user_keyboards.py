@@ -3,6 +3,7 @@ from aiogram.types import InlineKeyboardMarkup, WebAppInfo
 from typing import Dict, Optional, List, Tuple
 
 from config.settings import Settings
+from bot.utils.connect_link import connect_button_url
 
 
 def get_main_menu_inline_keyboard(
@@ -226,8 +227,13 @@ def get_connect_and_main_keyboard(
         lang: str,
         i18n_instance,
         settings: Settings,
-        config_link: Optional[str]) -> InlineKeyboardMarkup:
-    """Keyboard with a connect button and a back to main menu button."""
+        config_link: Optional[str],
+        *,
+        user_id: int) -> InlineKeyboardMarkup:
+    """Keyboard with a connect button and a back to main menu button.
+
+    The mini app button stays a WebApp; a URL button goes through the tracked connect
+    link when CONNECT_LINK_SECRET is set."""
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()
 
@@ -240,7 +246,8 @@ def get_connect_and_main_keyboard(
         )
     elif config_link:
         builder.row(
-            InlineKeyboardButton(text=_("connect_button"), url=config_link)
+            InlineKeyboardButton(text=_("connect_button"),
+                                 url=connect_button_url(settings, user_id, config_link))
         )
     else:
         builder.row(

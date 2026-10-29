@@ -34,6 +34,7 @@
   "pay_with_tribute_button": "❤️ Tribute",
   "pay_with_stars_button": "🌟 Telegram Stars",
   "connect_button": "🔗 Connect",
+  "connect_link_press_again": "This link has expired. Open the bot and press “🔗 Connect” again.",
 
   "devices_button": "📱 My devices",
   "devices_details": "📱 <b>Your devices ({current_devices}/{max_devices})</b>\n\n{devices}\n\nTo disconnect a device, tap the button with its number.\n<blockquote><i>A disconnected device reconnects the next time the app starts — remove the subscription in the app first.</i></blockquote>",

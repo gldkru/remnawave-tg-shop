@@ -211,7 +211,7 @@ class TributeService:
                             config_link=config_link,
                         )
                     markup = get_connect_and_main_keyboard(
-                        lang, i18n, settings, config_link
+                        lang, i18n, settings, config_link, user_id=int(user_id)
                     )
 
                     try:

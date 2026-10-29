@@ -750,6 +750,22 @@ class SubscriptionService:
             "is_panel_data": True,
         }
 
+    async def get_current_subscription_url(
+        self, session: AsyncSession, user_id: int
+    ) -> Optional[str]:
+        """The subscription URL the panel reports right now.
+
+        Read-only, unlike get_active_subscription_details: a panel hiccup during a link
+        click must not unlink the user locally.
+        """
+        db_user = await user_dal.get_user_by_id(session, user_id)
+        if not db_user or not db_user.panel_user_id:
+            return None
+        panel_user = await self.panel_service.get_user_by_panel_id(
+            db_user.panel_user_id, log_response=False
+        )
+        return (panel_user or {}).get("subscriptionUrl")
+
     async def get_subscriptions_ending_soon(
         self, session: AsyncSession, days_threshold: int
     ) -> List[Dict[str, Any]]:

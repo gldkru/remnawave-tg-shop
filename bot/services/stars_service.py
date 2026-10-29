@@ -154,7 +154,7 @@ class StarsService:
                 config_link=config_link,
             )
         markup = get_connect_and_main_keyboard(
-            current_lang, i18n, self.settings, config_link
+            current_lang, i18n, self.settings, config_link, user_id=message.from_user.id
         )
         try:
             await self.bot.send_message(

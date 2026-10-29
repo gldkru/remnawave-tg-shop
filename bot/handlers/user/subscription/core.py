@@ -22,6 +22,7 @@ from bot.services.notification_service import NotificationService
 from bot.middlewares.i18n import JsonI18n
 from bot.services.analytics import track
 from bot.utils.date_utils import format_long_date
+from bot.utils.connect_link import connect_button_url
 from db.dal import subscription_dal, user_billing_dal
 from db.models import Subscription
 
@@ -183,7 +184,7 @@ async def my_subscription_command_handler(
                 prepend_rows.append([
                     InlineKeyboardButton(
                         text=get_text("connect_button"),
-                        url=cfg_link_val,
+                        url=connect_button_url(settings, event.from_user.id, cfg_link_val),
                     )
                 ])
 
