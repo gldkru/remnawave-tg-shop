@@ -17,6 +17,8 @@ from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
 from bot.services.notification_service import NotificationService
 from db.dal import payment_dal, user_dal
 from bot.utils.text_sanitizer import sanitize_display_name, username_for_display
+from bot.utils.metrics import external_call
+from bot.services.analytics import track
 
 
 class CryptoPayService:
@@ -96,14 +98,16 @@ class CryptoPayService:
             "payment_db_id": str(payment_record.payment_id),
         })
         try:
-            invoice = await self.client.create_invoice(
-                amount=amount,
-                currency_type=self.settings.CRYPTOPAY_CURRENCY_TYPE,
-                fiat=self.settings.CRYPTOPAY_ASSET if self.settings.CRYPTOPAY_CURRENCY_TYPE == "fiat" else None,
-                asset=self.settings.CRYPTOPAY_ASSET if self.settings.CRYPTOPAY_CURRENCY_TYPE == "crypto" else None,
-                description=description,
-                payload=payload,
-            )
+            async with external_call("cryptopay", "create_invoice",
+                                     self.settings.PAYMENT_API_TIMEOUT_SECONDS):
+                invoice = await self.client.create_invoice(
+                    amount=amount,
+                    currency_type=self.settings.CRYPTOPAY_CURRENCY_TYPE,
+                    fiat=self.settings.CRYPTOPAY_ASSET if self.settings.CRYPTOPAY_CURRENCY_TYPE == "fiat" else None,
+                    asset=self.settings.CRYPTOPAY_ASSET if self.settings.CRYPTOPAY_CURRENCY_TYPE == "crypto" else None,
+                    description=description,
+                    payload=payload,
+                )
             try:
                 await payment_dal.update_provider_payment_and_status(
                     session,
@@ -173,6 +177,8 @@ class CryptoPayService:
                 await session.rollback()
                 logging.error(f"Failed to process CryptoPay invoice: {e}", exc_info=True)
                 return
+            track(user_id, "payment_succeeded", provider="cryptopay", months=months,
+                  amount=float(invoice.amount))
 
             db_user = await user_dal.get_user_by_id(session, user_id)
             # Use DB language for user-facing messages
@@ -209,7 +215,7 @@ class CryptoPayService:
                          end_date=final_end.strftime('%Y-%m-%d'),
                          config_link=config_link)
 
-            markup = get_connect_and_main_keyboard(lang, i18n, settings, config_link)
+            markup = get_connect_and_main_keyboard(lang, i18n, settings, config_link, user_id=user_id)
             try:
                 await bot.send_message(
                     user_id,

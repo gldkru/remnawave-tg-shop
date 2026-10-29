@@ -9,6 +9,7 @@ from bot.services.referral_service import ReferralService
 
 from bot.keyboards.inline.user_keyboards import get_back_to_main_menu_markup
 from bot.middlewares.i18n import JsonI18n
+from bot.services.analytics import track
 
 router = Router(name="user_referral_router")
 
@@ -140,6 +141,7 @@ async def referral_action_handler(callback: types.CallbackQuery, settings: Setti
                 friend_message,
                 disable_web_page_preview=True
             )
+            track(inviter_user_id, "referral_shared", channel="share_message")
             
         except Exception as e:
             logging.error(f"Error in referral share message: {e}")

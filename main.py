@@ -5,6 +5,7 @@ import sys
 from dotenv import load_dotenv
 
 from bot.main_bot import run_bot
+from bot.utils.log_redaction import install_log_redaction
 from config.settings import get_settings, Settings
 from db.database_setup import init_db, init_db_connection
 
@@ -29,6 +30,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         stream=sys.stdout,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    install_log_redaction()
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):

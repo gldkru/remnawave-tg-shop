@@ -23,6 +23,7 @@ from config.settings import Settings
 from bot.services.notification_service import NotificationService
 from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
 from bot.utils.text_sanitizer import sanitize_display_name, username_for_display
+from bot.services.analytics import track
 
 payment_processing_lock = asyncio.Lock()
 
@@ -230,6 +231,8 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
             raise Exception(
                 f"Subscription Error: Failed to activate for user {user_id}")
 
+        track(user_id, "payment_succeeded", provider="yookassa", months=subscription_months,
+              amount=payment_value, auto_renew=is_auto_renew)
         base_subscription_end_date = activation_details['end_date']
         final_end_date_for_user = base_subscription_end_date
         applied_promo_bonus_days = activation_details.get(
@@ -310,7 +313,7 @@ async def process_successful_payment(session: AsyncSession, bot: Bot,
                 details_message = _("payment_successful_error_details")
 
             details_markup = get_connect_and_main_keyboard(
-                user_lang, i18n, settings, config_link
+                user_lang, i18n, settings, config_link, user_id=user_id
             )
         try:
             await bot.send_message(
@@ -356,9 +359,12 @@ async def process_cancelled_payment(session: AsyncSession, bot: Bot,
     user_id_str = metadata.get("user_id")
     payment_db_id_str = metadata.get("payment_db_id")
 
+    cancellation_reason = payment_info_from_webhook.get("cancellation_reason") or "unknown"
     # Auto-renew charges carry no payment_db_id: they are created off-session in
     # SubscriptionService.charge_subscription_renewal, so a decline only gets audited.
     if metadata.get("auto_renew_for_subscription_id") and user_id_str and user_id_str.isdigit():
+        track(int(user_id_str), "payment_failed", provider="yookassa",
+              reason=cancellation_reason, auto_renew=True)
         amount_value = (payment_info_from_webhook.get("amount") or {}).get("value")
         months_str = metadata.get("subscription_months")
         await NotificationService(bot, settings, i18n).notify_autopay_event(
@@ -388,6 +394,7 @@ async def process_cancelled_payment(session: AsyncSession, bot: Bot,
             payment_db_id=payment_db_id,
             new_status=payment_info_from_webhook.get("status", "canceled"),
             yk_payment_id=payment_info_from_webhook.get("id"))
+        track(user_id, "payment_failed", provider="yookassa", reason=cancellation_reason)
 
         if updated_payment:
             logging.info(

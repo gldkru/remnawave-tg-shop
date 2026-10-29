@@ -35,10 +35,13 @@ from bot.services.promo_code_service import PromoCodeService
 from bot.services.stars_service import StarsService
 from bot.services.tribute_service import TributeService, tribute_webhook_route
 from bot.services.crypto_pay_service import CryptoPayService, cryptopay_webhook_route
+from bot.services import analytics
 
 from bot.handlers.user import payment as user_payment_webhook_module
 from bot.handlers.admin.sync_admin import perform_sync
+from bot.utils.log_redaction import redact_secrets
 from bot.utils.message_queue import init_queue_manager
+from bot.utils.metrics import start_metrics_server
 
 
 async def register_all_routers(dp: Dispatcher, settings: Settings):
@@ -62,16 +65,18 @@ async def on_startup_configured(dispatcher: Dispatcher):
         full_telegram_webhook_url = (
             f"{str(telegram_webhook_url_to_set).rstrip('/')}/{settings.BOT_TOKEN}"
         )
+        webhook_url_for_log = redact_secrets(full_telegram_webhook_url)
 
         logging.info(
-            f"STARTUP: Attempting to set Telegram webhook to: {full_telegram_webhook_url if full_telegram_webhook_url != 'ERROR_URL_TOKEN_DETECTED' else 'HIDDEN DUE TO TOKEN'}"
+            f"STARTUP: Attempting to set Telegram webhook to: {webhook_url_for_log}"
         )
 
         if full_telegram_webhook_url != "ERROR_URL_TOKEN_DETECTED":
             try:
                 current_webhook_info = await bot.get_webhook_info()
                 logging.info(
-                    f"STARTUP: Current Telegram webhook info BEFORE setting: {current_webhook_info.model_dump_json(exclude_none=True, indent=2)}"
+                    "STARTUP: Current Telegram webhook info BEFORE setting: "
+                    + redact_secrets(current_webhook_info.model_dump_json(exclude_none=True, indent=2))
                 )
 
                 set_success = await bot.set_webhook(
@@ -81,16 +86,17 @@ async def on_startup_configured(dispatcher: Dispatcher):
                 )
                 if set_success:
                     logging.info(
-                        f"STARTUP: bot.set_webhook to {full_telegram_webhook_url} returned SUCCESS (True)."
+                        f"STARTUP: bot.set_webhook to {webhook_url_for_log} returned SUCCESS (True)."
                     )
                 else:
                     logging.error(
-                        f"STARTUP: bot.set_webhook to {full_telegram_webhook_url} returned FAILURE (False)."
+                        f"STARTUP: bot.set_webhook to {webhook_url_for_log} returned FAILURE (False)."
                     )
 
                 new_webhook_info = await bot.get_webhook_info()
                 logging.info(
-                    f"STARTUP: Telegram Webhook info AFTER setting: {new_webhook_info.model_dump_json(exclude_none=True, indent=2)}"
+                    "STARTUP: Telegram Webhook info AFTER setting: "
+                    + redact_secrets(new_webhook_info.model_dump_json(exclude_none=True, indent=2))
                 )
                 if not new_webhook_info.url:
                     logging.error(
@@ -217,6 +223,8 @@ async def on_shutdown_configured(dispatcher: Dispatcher):
         except Exception as e:
             logging.warning(f"SHUTDOWN: Failed to close bot session: {e}")
 
+    await analytics.flush()
+
     from db.database_setup import async_engine as global_async_engine
 
     if global_async_engine:
@@ -259,6 +267,7 @@ async def run_bot(settings_param: Settings):
         dp[key] = service
     dp["panel_service"] = services["panel_service"]
     dp["async_session_factory"] = local_async_session_factory
+    analytics.configure(local_async_session_factory)
 
     # Wrap startup/shutdown handlers to satisfy aiogram event signature (no args passed)
     async def _on_startup_wrapper():
@@ -285,7 +294,12 @@ async def run_bot(settings_param: Settings):
     logging.info(f"--- End Bot Run Mode Decision ---")
 
     web_app_runner = None
+    metrics_runner = None
     main_tasks = []
+
+    if settings_param.METRICS_PORT:
+        metrics_runner = await start_metrics_server(settings_param.METRICS_PORT,
+                                                    settings_param.BOT_VERSION)
 
     # Only run AIOHTTP server for webhook mode
     async def web_server_task():
@@ -322,6 +336,9 @@ async def run_bot(settings_param: Settings):
         if web_app_runner:
             await web_app_runner.cleanup()
             logging.info("AIOHTTP AppRunner cleaned up.")
+
+        if metrics_runner:
+            await metrics_runner.cleanup()
 
         await dp.emit_shutdown()
         logging.info("Dispatcher shutdown sequence emitted.")

@@ -11,6 +11,7 @@ from yookassa.domain.exceptions.not_found_error import NotFoundError
 from yookassa.domain.response.payment_response import PaymentResponse
 
 from config.settings import Settings
+from bot.utils.metrics import external_call
 
 
 class YooKassaService:
@@ -56,6 +57,15 @@ class YooKassaService:
         logging.info(
             f"YooKassa Service effective return_url for payments: {self.return_url}"
         )
+
+    def _call(self, op: str):
+        """Metrics and PAYMENT_API_TIMEOUT_SECONDS for one SDK call.
+
+        The SDK is synchronous and runs in a thread: a timeout frees the caller, but the
+        thread finishes its HTTP request on its own.
+        """
+        return external_call("yookassa", op,
+                             getattr(self.settings, "PAYMENT_API_TIMEOUT_SECONDS", None))
 
     async def create_payment(
             self,
@@ -164,9 +174,10 @@ class YooKassaService:
             )
 
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None, lambda: YooKassaPayment.create(payment_request,
-                                                     idempotence_key))
+            async with self._call("create_payment"):
+                response = await loop.run_in_executor(
+                    None, lambda: YooKassaPayment.create(payment_request,
+                                                         idempotence_key))
 
             logging.info(
                 f"YooKassa Payment.create response: ID={response.id}, Status={response.status}, Paid={response.paid}"
@@ -221,14 +232,17 @@ class YooKassaService:
             return None, None
         try:
             loop = asyncio.get_running_loop()
-            payment = await loop.run_in_executor(
-                None, lambda: YooKassaPayment.find_one(payment_id))
+            async with self._call("find_payment"):
+                payment = await loop.run_in_executor(
+                    None, lambda: YooKassaPayment.find_one(payment_id))
             return payment, None
         except (NotFoundError, BadRequestError):
             return None, None
         except Exception as e:
-            logging.error(f"YooKassa lookup of payment {payment_id} failed: {e}")
-            return None, str(e)
+            logging.error(f"YooKassa lookup of payment {payment_id} failed: {e!r}")
+            # str(TimeoutError()) is empty; an empty error would read as "unknown payment"
+            # and acknowledge a notification that must be redelivered.
+            return None, str(e) or type(e).__name__
 
     async def get_payment_info(
             self, payment_id_in_yookassa: str) -> Optional[Dict[str, Any]]:
@@ -242,8 +256,9 @@ class YooKassaService:
             )
 
             loop = asyncio.get_running_loop()
-            payment_info_yk = await loop.run_in_executor(
-                None, lambda: YooKassaPayment.find_one(payment_id_in_yookassa))
+            async with self._call("find_payment"):
+                payment_info_yk = await loop.run_in_executor(
+                    None, lambda: YooKassaPayment.find_one(payment_id_in_yookassa))
 
             if payment_info_yk:
                 logging.info(
@@ -301,7 +316,8 @@ class YooKassaService:
             return False
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: YooKassaPayment.cancel(payment_id_in_yookassa))
+            async with self._call("cancel_payment"):
+                await loop.run_in_executor(None, lambda: YooKassaPayment.cancel(payment_id_in_yookassa))
             logging.info(f"Cancelled YooKassa payment {payment_id_in_yookassa}")
             return True
         except Exception as e:

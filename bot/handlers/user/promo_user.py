@@ -143,7 +143,7 @@ async def process_promo_code_input(message: types.Message, state: FSMContext,
                 config_link=config_link,
             )
             reply_markup = get_connect_and_main_keyboard(
-                current_lang, i18n, settings, config_link
+                current_lang, i18n, settings, config_link, user_id=user.id
             )
         else:
             await session.rollback()

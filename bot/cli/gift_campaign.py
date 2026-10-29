@@ -166,8 +166,7 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    # Root stays at WARNING on purpose: init_db_connection logs the full DATABASE_URL at INFO,
-    # and this output is read by people and agents.
+    # Root stays at WARNING on purpose: this output is read by people and agents.
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     try:

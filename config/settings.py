@@ -108,6 +108,10 @@ class Settings(BaseSettings):
 
     PANEL_API_URL: Optional[str] = None
     PANEL_API_KEY: Optional[str] = None
+    PANEL_API_TIMEOUT_SECONDS: float = Field(
+        default=10.0, description="Upper bound for one panel API request")
+    PAYMENT_API_TIMEOUT_SECONDS: float = Field(
+        default=15.0, description="Upper bound for one YooKassa, CryptoPay or Stars invoice request")
     USER_TRAFFIC_LIMIT_GB: Optional[float] = Field(default=0.0)
     USER_TRAFFIC_STRATEGY: str = Field(default="NO_RESET")
     USER_SQUAD_UUIDS: Optional[str] = Field(
@@ -121,9 +125,17 @@ class Settings(BaseSettings):
 
     WEB_SERVER_HOST: str = Field(default="0.0.0.0")
     WEB_SERVER_PORT: int = Field(default=8080)
+    METRICS_PORT: int = Field(
+        default=9091,
+        description="Port of the Prometheus /metrics runner; keep it unpublished. 0 disables it")
+    BOT_VERSION: str = Field(default="dev", description="Reported in vpnox_bot_info")
     LOGS_PAGE_SIZE: int = Field(default=10)
 
     SUBSCRIPTION_MINI_APP_URL: Optional[str] = Field(default=None)
+    CONNECT_LINK_SECRET: Optional[str] = Field(
+        default=None,
+        description="HMAC key for tracked /go/connect links on URL connect buttons; unset disables them")
+    CONNECT_LINK_TTL_DAYS: int = Field(default=30, description="How long a tracked connect link stays valid")
 
     START_COMMAND_DESCRIPTION: Optional[str] = Field(default=None)
     DISABLE_WELCOME_MESSAGE: bool = Field(default=False, description="Disable welcome message on /start command")

@@ -10,7 +10,8 @@ from bot.utils.date_utils import add_months
 from db.models import User, Subscription
 
 from config.settings import Settings
-from .panel_api_service import PanelApiService
+from .panel_api_service import PanelApiService, PanelUnavailableError
+from .analytics import track
 
 
 class SubscriptionService:
@@ -106,9 +107,17 @@ class SubscriptionService:
                 logging.info(
                     f"User {user_id} (local panel_id: {current_local_panel_id}) not found on panel by TG ID. Fetching by panel_id."
                 )
-                panel_user_obj_from_api = await self.panel_service.get_user_by_panel_id(
-                    current_local_panel_id
-                )
+                try:
+                    panel_user_obj_from_api = await self.panel_service.fetch_user_by_panel_id(
+                        current_local_panel_id
+                    )
+                except PanelUnavailableError as e_unavailable:
+                    # Creating a replacement now would relink the user to an empty account.
+                    logging.error(
+                        f"Panel did not answer for panel user {current_local_panel_id} of TG user {user_id} "
+                        f"({e_unavailable}); keeping the local link and giving up for now."
+                    )
+                    return None, None, None, False
                 if not panel_user_obj_from_api:
                     logging.warning(
                         f"Local panel_id {current_local_panel_id} for TG user {user_id} also not found on panel. User might be deleted from panel or UUID desynced."
@@ -668,7 +677,15 @@ class SubscriptionService:
         local_active_sub = await subscription_dal.get_active_subscription_by_user_id(
             session, user_id, panel_user_id
         )
-        panel_user_data = await self.panel_service.get_user_by_panel_id(panel_user_id)
+        try:
+            panel_user_data = await self.panel_service.fetch_user_by_panel_id(panel_user_id)
+        except PanelUnavailableError as e_unavailable:
+            # Unavailable is not "deleted": the link must survive a slow or failing panel.
+            logging.warning(
+                f"Panel did not answer for panel user {panel_user_id} of user {user_id} "
+                f"({e_unavailable}); keeping the local link."
+            )
+            return None
 
         if not panel_user_data:
             logging.warning(
@@ -748,6 +765,22 @@ class SubscriptionService:
             "user_bot_username": db_user.username,
             "is_panel_data": True,
         }
+
+    async def get_current_subscription_url(
+        self, session: AsyncSession, user_id: int
+    ) -> Optional[str]:
+        """The subscription URL the panel reports right now.
+
+        Read-only, unlike get_active_subscription_details: a panel hiccup during a link
+        click must not unlink the user locally.
+        """
+        db_user = await user_dal.get_user_by_id(session, user_id)
+        if not db_user or not db_user.panel_user_id:
+            return None
+        panel_user = await self.panel_service.get_user_by_panel_id(
+            db_user.panel_user_id, log_response=False
+        )
+        return (panel_user or {}).get("subscriptionUrl")
 
     async def get_subscriptions_ending_soon(
         self, session: AsyncSession, days_threshold: int
@@ -844,11 +877,15 @@ class SubscriptionService:
         )
         if not resp or resp.get("status") not in {"pending", "waiting_for_capture", "succeeded"}:
             logging.error(f"Auto-renew create_payment failed: {resp}")
+            track(sub.user_id, "payment_failed", provider="yookassa", reason="gateway_error",
+                  auto_renew=True)
             await audit.notify_autopay_event(
                 sub.user_id, "charge_skipped", card=card_display, amount=amount, months=months,
                 reason=f"ЮKassa отклонила запрос: {(resp or {}).get('message') or (resp or {}).get('status') or 'нет ответа'}")
             return False
         logging.info(f"Auto-renew initiated for user {sub.user_id} payment_id={resp.get('id')}")
+        track(sub.user_id, "payment_started", provider="yookassa", months=months,
+              amount=float(amount), auto_renew=True)
         await audit.notify_autopay_event(sub.user_id, "charge_started", card=card_display,
                                          amount=amount, months=months)
         return True

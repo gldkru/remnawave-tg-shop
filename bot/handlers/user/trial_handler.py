@@ -14,6 +14,7 @@ from bot.keyboards.inline.user_keyboards import (
     get_connect_and_main_keyboard,
 )
 from bot.middlewares.i18n import JsonI18n
+from bot.services.analytics import track
 from .start import send_main_menu
 
 router = Router(name="user_trial_router")
@@ -113,6 +114,8 @@ async def request_trial_confirmation_handler(
         # Send notification to admin about new trial
         notification_service = NotificationService(callback.bot, settings, i18n)
         await notification_service.notify_trial_activation(user_id, end_date_obj)
+        track(user_id, "trial_activated",
+              days=activation_result.get("days", settings.TRIAL_DURATION_DAYS))
         # Mark ad attribution trial if exists
         try:
             from db.dal import ad_dal as _ad_dal
@@ -142,7 +145,7 @@ async def request_trial_confirmation_handler(
 
     reply_markup = (
         get_connect_and_main_keyboard(
-            current_lang, i18n, settings, config_link_for_trial
+            current_lang, i18n, settings, config_link_for_trial, user_id=user_id
         )
         if activation_result and activation_result.get("activated")
         else get_main_menu_inline_keyboard(
@@ -275,7 +278,7 @@ async def confirm_activate_trial_handler(
 
     reply_markup = (
         get_connect_and_main_keyboard(
-            current_lang, i18n, settings, config_link_for_trial
+            current_lang, i18n, settings, config_link_for_trial, user_id=user_id
         )
         if activation_result and activation_result.get("activated")
         else get_main_menu_inline_keyboard(
@@ -306,6 +309,8 @@ async def confirm_activate_trial_handler(
     if activation_result and activation_result.get("activated") and end_date_obj:
         notification_service = NotificationService(callback.bot, settings, i18n)
         await notification_service.notify_trial_activation(user_id, end_date_obj)
+        track(user_id, "trial_activated",
+              days=activation_result.get("days", settings.TRIAL_DURATION_DAYS))
         try:
             from db.dal import ad_dal as _ad_dal
             await _ad_dal.mark_trial_activated(session, user_id)
