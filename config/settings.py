@@ -121,6 +121,10 @@ class Settings(BaseSettings):
 
     WEB_SERVER_HOST: str = Field(default="0.0.0.0")
     WEB_SERVER_PORT: int = Field(default=8080)
+    METRICS_PORT: int = Field(
+        default=9091,
+        description="Port of the Prometheus /metrics runner; keep it unpublished. 0 disables it")
+    BOT_VERSION: str = Field(default="dev", description="Reported in vpnox_bot_info")
     LOGS_PAGE_SIZE: int = Field(default=10)
 
     SUBSCRIPTION_MINI_APP_URL: Optional[str] = Field(default=None)

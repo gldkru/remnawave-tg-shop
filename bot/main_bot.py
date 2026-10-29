@@ -39,6 +39,7 @@ from bot.services.crypto_pay_service import CryptoPayService, cryptopay_webhook_
 from bot.handlers.user import payment as user_payment_webhook_module
 from bot.handlers.admin.sync_admin import perform_sync
 from bot.utils.message_queue import init_queue_manager
+from bot.utils.metrics import start_metrics_server
 
 
 async def register_all_routers(dp: Dispatcher, settings: Settings):
@@ -285,7 +286,12 @@ async def run_bot(settings_param: Settings):
     logging.info(f"--- End Bot Run Mode Decision ---")
 
     web_app_runner = None
+    metrics_runner = None
     main_tasks = []
+
+    if settings_param.METRICS_PORT:
+        metrics_runner = await start_metrics_server(settings_param.METRICS_PORT,
+                                                    settings_param.BOT_VERSION)
 
     # Only run AIOHTTP server for webhook mode
     async def web_server_task():
@@ -322,6 +328,9 @@ async def run_bot(settings_param: Settings):
         if web_app_runner:
             await web_app_runner.cleanup()
             logging.info("AIOHTTP AppRunner cleaned up.")
+
+        if metrics_runner:
+            await metrics_runner.cleanup()
 
         await dp.emit_shutdown()
         logging.info("Dispatcher shutdown sequence emitted.")
