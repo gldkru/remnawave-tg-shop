@@ -1,4 +1,5 @@
 import logging
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker
 
@@ -14,7 +15,8 @@ def init_db_connection(settings: Settings) -> sessionmaker:
 
     if async_engine is None:
         logging.info(
-            f"Attempting to create SQLAlchemy engine with URL: {settings.DATABASE_URL}"
+            "Attempting to create SQLAlchemy engine with URL: "
+            + make_url(settings.DATABASE_URL).render_as_string(hide_password=True)
         )
         async_engine = create_async_engine(
             settings.DATABASE_URL,
