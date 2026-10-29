@@ -157,6 +157,18 @@
 
 Файлы `Dockerfile` и `docker-compose.yml` уже настроены для сборки и запуска проекта. `docker-compose.yml` использует готовый образ с GitHub Container Registry, но вы можете раскомментировать `build: .` для локальной сборки.
 
+## 📈 Наблюдаемость
+
+-   **Метрики Prometheus** отдаются на `http://<контейнер>:METRICS_PORT/metrics` (по умолчанию `9091`, `0` отключает). Это отдельный aiohttp-сервер: не публикуйте этот порт наружу, публичное приложение на `WEB_SERVER_PORT` метрик не отдаёт. Метрики:
+    -   `vpnox_bot_updates_total{kind, handler, outcome}` и `vpnox_bot_update_seconds{kind, handler}` — апдейты по типу (`message`, `callback`, `other`) и обработчику (имя функции-хендлера, `unhandled` если ни один не подошёл);
+    -   `vpnox_bot_external_call_seconds{service, op}` и `vpnox_bot_external_call_errors_total{service, op}` — вызовы `panel`, `yookassa`, `cryptopay`, `stars`, `telegram`;
+    -   `vpnox_bot_callbacks_unanswered_total{handler}` — нажатия кнопок, на которые хендлер не ответил за 2,5 с; бот отвечает сам, чтобы кнопка не крутилась;
+    -   `vpnox_bot_info{version}` — значение `BOT_VERSION`.
+-   **Таймауты** внешних вызовов: `PANEL_API_TIMEOUT_SECONDS` (10 с) и `PAYMENT_API_TIMEOUT_SECONDS` (15 с). По истечении пользователь получает обычное сообщение об ошибке.
+-   **Продуктовые события** пишутся в таблицу `analytics_events` (`user_id`, `ts`, `name`, `props`, `session_id`; новая сессия после 30 минут без событий). Словарь событий: `start` (`source`: `ref`/`promo`/`ad`/`organic`, `new_user`, `campaign_id`), `trial_activated` (`days`), `section_viewed` (`section`), `subscribe_period_selected` (`months`), `payment_started` (`provider`, `months`, `amount`, `auto_renew`), `payment_succeeded` (то же), `payment_failed` (`provider`, `reason`, `auto_renew`), `referral_shared` (`channel`), `connect_link_opened` (`result`), `autorenew_toggled` (`enabled`, `source`).
+-   **Отслеживаемая кнопка подключения:** если задан `CONNECT_LINK_SECRET` (и `WEBHOOK_BASE_URL`), URL-кнопка «Подключиться» ведёт на `/go/connect/<токен>` публичного приложения. Токен подписан HMAC-SHA256 и живёт `CONNECT_LINK_TTL_DAYS` (30 дней); сервер записывает `connect_link_opened` и перенаправляет на актуальную ссылку подписки из панели. Кнопка мини-приложения (`SUBSCRIPTION_MINI_APP_URL`) не меняется, её открытия не отслеживаются. Без секрета кнопка ведёт прямо на ссылку подписки, как раньше.
+-   **Тесты:** `pip install -r requirements-dev.txt && python -m pytest`.
+
 ## 📁 Структура проекта
 
 ```
