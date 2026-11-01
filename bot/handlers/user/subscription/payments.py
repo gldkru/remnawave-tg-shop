@@ -10,7 +10,7 @@ from bot.services.crypto_pay_service import CryptoPayService
 from bot.services.stars_service import StarsService
 from bot.middlewares.i18n import JsonI18n
 from bot.services.analytics import track
-from db.dal import payment_dal, user_billing_dal
+from db.dal import payment_dal
 
 router = Router(name="user_subscription_payments_router")
 
@@ -78,7 +78,7 @@ async def select_subscription_period_callback_handler(callback: types.CallbackQu
         pass
 
 
-@router.callback_query(F.data.startswith("pay_yk:"))
+@router.callback_query(F.data.startswith(("pay_yk:", "pay_yk1:")))
 async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Settings, i18n_data: dict, yookassa_service: YooKassaService, session: AsyncSession):
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     i18n: Optional[JsonI18n] = i18n_data.get("i18n_instance")
@@ -102,7 +102,7 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
         return
 
     try:
-        _, data_payload = callback.data.split(":", 1)
+        prefix, data_payload = callback.data.split(":", 1)
         months_str, price_str = data_payload.split(":")
         months = int(months_str)
         price_rub = float(price_str)
@@ -115,7 +115,8 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
         return
 
     user_id = callback.from_user.id
-    track(user_id, "payment_started", provider="yookassa", months=months, amount=price_rub)
+    autopay = prefix == "pay_yk" and bool(getattr(settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False))
+    track(user_id, "payment_started", provider="yookassa", months=months, amount=price_rub, autopay=autopay)
     payment_description = get_text("payment_description_subscription", months=months)
     currency_code_for_yk = "RUB"
 
@@ -169,54 +170,12 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
         description=payment_description,
         metadata=yookassa_metadata,
         receipt_email=receipt_email_for_yk,
-        # Save method only when autopayments are enabled
-        save_payment_method=bool(getattr(settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False)),
+        save_payment_method=autopay,
     )
 
     if payment_response_yk and payment_response_yk.get("confirmation_url"):
-        pm = payment_response_yk.get("payment_method")
-        try:
-            if pm and pm.get("id"):
-                pm_type = pm.get("type")
-                title = pm.get("title")
-                card = pm.get("card") or {}
-                account_number = pm.get("account_number") or pm.get("account")
-                if isinstance(card, dict) and (pm_type or "").lower() in {"bank_card", "bank-card", "card"}:
-                    display_network = card.get("card_type") or title or "Card"
-                    display_last4 = card.get("last4")
-                elif (pm_type or "").lower() in {"yoo_money", "yoomoney", "yoo-money", "wallet"}:
-                    display_network = "YooMoney"
-                    display_last4 = (
-                        account_number[-4:]
-                        if isinstance(account_number, str) and len(account_number) >= 4
-                        else None
-                    )
-                else:
-                    display_network = title or (pm_type.upper() if pm_type else "Payment method")
-                    display_last4 = None
-                await user_billing_dal.upsert_yk_payment_method(
-                    session,
-                    user_id=user_id,
-                    payment_method_id=pm["id"],
-                    card_last4=display_last4,
-                    card_network=display_network,
-                )
-                try:
-                    await user_billing_dal.upsert_user_payment_method(
-                        session,
-                        user_id=user_id,
-                        provider_payment_method_id=pm["id"],
-                        provider="yookassa",
-                        card_last4=display_last4,
-                        card_network=display_network,
-                        set_default=True,
-                    )
-                except Exception:
-                    pass
-                await session.commit()
-        except Exception:
-            await session.rollback()
-            logging.exception("Failed to save YooKassa payment method preliminarily")
+        # The method is persisted by the payment webhook once YooKassa reports it saved;
+        # at creation it is never saved yet.
         try:
             await payment_dal.update_payment_status_by_db_id(
                 session,
@@ -240,7 +199,7 @@ async def pay_yk_callback_handler(callback: types.CallbackQuery, settings: Setti
 
         # save_payment_method=true is unconditional saving: YooKassa requires the
         # merchant to state the autopay terms and get consent before the payment.
-        if getattr(settings, 'YOOKASSA_AUTOPAYMENTS_ENABLED', False):
+        if autopay:
             link_text = get_text(
                 key="payment_link_message_autopay",
                 months=months,

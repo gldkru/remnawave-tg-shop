@@ -30,6 +30,8 @@
   "choose_payment_method": "Choose payment method:",
   "pay_button": "💳 Pay",
   "pay_with_yookassa_button": "💳 YooKassa",
+  "pay_with_yookassa_once_button": "⚡ One-time: SBP or card",
+  "pay_with_yookassa_autopay_button": "🔄 With auto-renewal (card)",
   "pay_with_cryptopay_button": "💎 CryptoBot",
   "pay_with_tribute_button": "❤️ Tribute",
   "pay_with_stars_button": "🌟 Telegram Stars",
