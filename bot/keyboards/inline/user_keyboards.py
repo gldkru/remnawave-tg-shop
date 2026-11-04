@@ -126,12 +126,12 @@ def get_payment_method_keyboard(months: int, price: float,
         builder.button(text=_("pay_with_tribute_button"), url=tribute_url)
     if settings.YOOKASSA_ENABLED:
         # Saving a method narrows the YooKassa form to the methods enabled for autopay
-        # in the shop, so the one-time option keeps SBP and every other method.
+        # in the shop (card and SBP), so the one-time option keeps every other method.
         if settings.YOOKASSA_AUTOPAYMENTS_ENABLED:
-            builder.button(text=_("pay_with_yookassa_once_button"),
-                           callback_data=f"pay_yk1:{months}:{price}")
             builder.button(text=_("pay_with_yookassa_autopay_button"),
                            callback_data=f"pay_yk:{months}:{price}")
+            builder.button(text=_("pay_with_yookassa_once_button"),
+                           callback_data=f"pay_yk1:{months}:{price}")
         else:
             builder.button(text=_("pay_with_yookassa_button"),
                            callback_data=f"pay_yk:{months}:{price}")
