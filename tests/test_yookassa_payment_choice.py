@@ -89,7 +89,7 @@ def pay(callback_data: str, autopay_enabled: bool):
 
 def test_autopay_on_offers_one_time_and_autopay():
     markup = get_payment_method_keyboard(1, 199.0, None, None, "₽", "ru", KeyI18n(), settings(True))
-    assert yookassa_callbacks(markup) == ["pay_yk1:1:199.0", "pay_yk:1:199.0"]
+    assert yookassa_callbacks(markup) == ["pay_yk:1:199.0", "pay_yk1:1:199.0"]
 
 
 def test_autopay_off_offers_a_single_plain_payment():
