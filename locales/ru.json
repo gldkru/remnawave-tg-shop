@@ -30,7 +30,7 @@
   "choose_payment_method": "Выберите способ оплаты:",
   "pay_button": "💳 Оплатить",
   "pay_with_yookassa_button": "💳 ЮKassa",
-  "pay_with_yookassa_once_button": "⚡ Разово: СБП или карта",
+  "pay_with_yookassa_once_button": "⚡ Разово: СБП, SberPay или карта",
   "pay_with_yookassa_autopay_button": "🔄 С автопродлением: СБП, SberPay или карта",
   "pay_with_cryptopay_button": "💎 CryptoBot",
   "pay_with_tribute_button": "❤️ Tribute",
